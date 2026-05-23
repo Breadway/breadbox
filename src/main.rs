@@ -328,45 +328,35 @@ fn run_ui(entries: Vec<(String, String)>) {
             gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
         );
 
-        // Full-screen transparent backdrop at Layer::Top — catches clicks
-        // outside the launcher and closes it. Sits below the launcher
-        // (Layer::Overlay) so it never intercepts clicks on the UI itself.
-        let backdrop = ApplicationWindow::builder()
-            .application(app)
-            .build();
-        backdrop.init_layer_shell();
-        backdrop.set_layer(Layer::Top);
-        backdrop.set_keyboard_mode(KeyboardMode::None);
-        for edge in [Edge::Top, Edge::Bottom, Edge::Left, Edge::Right] {
-            backdrop.set_anchor(edge, true);
-        }
-
-        // Main launcher window
+        // Single full-screen window covers the entire monitor. The window
+        // background is transparent; only the launcher vbox is visible.
+        // Clicks outside the vbox are detected via coordinate check and
+        // close the window. KeyboardMode::Exclusive keeps focus stable so
+        // pointer-leave events never steal it away.
         let window = ApplicationWindow::builder()
             .application(app)
-            .default_width(700)
             .build();
         window.init_layer_shell();
         window.set_layer(Layer::Overlay);
-        // Exclusive: compositor won't hand focus to another window on pointer
-        // leave, so the backdrop (not a focus event) handles click-outside.
         window.set_keyboard_mode(KeyboardMode::Exclusive);
-        window.set_anchor(Edge::Top, true);
-        window.set_exclusive_zone(-1);
+        for edge in [Edge::Top, Edge::Bottom, Edge::Left, Edge::Right] {
+            window.set_anchor(edge, true);
+        }
+        window.set_exclusive_zone(0);
 
-        // Shared close: dismisses both windows and cleans up the PID file.
         let close_all: Rc<dyn Fn()> = Rc::new({
             let w = window.clone();
-            let b = backdrop.clone();
             move || {
                 cleanup_pid();
                 w.close();
-                b.close();
             }
         });
 
         let vbox = GBox::new(Orientation::Vertical, 0);
         vbox.add_css_class("launcher-bg");
+        vbox.set_halign(gtk4::Align::Center);
+        vbox.set_valign(gtk4::Align::Start);
+        vbox.set_size_request(700, -1);
 
         let search = SearchEntry::new();
         search.set_placeholder_text(Some("breadbox"));
@@ -504,16 +494,29 @@ fn run_ui(entries: Vec<(String, String)>) {
             }
         });
 
-        // Backdrop click: user clicked outside the launcher
-        let close_bd = Rc::clone(&close_all);
-        let click = gtk4::GestureClick::new();
-        click.connect_released(move |_, _, _, _| close_bd());
-        backdrop.add_controller(click);
+        // Close when clicking outside the launcher box.
+        // connect_pressed fires before child widgets handle the click, so
+        // (x, y) are window-relative and always available. Clicks inside the
+        // vbox are within its allocation and are ignored; everything outside
+        // (the transparent full-screen area) dismisses the launcher.
+        let close_outside = Rc::clone(&close_all);
+        let vbox_ref = vbox.clone();
+        let outside_click = gtk4::GestureClick::new();
+        outside_click.connect_pressed(move |_, _, x, y| {
+            let a = vbox_ref.allocation();
+            if x < a.x() as f64
+                || x > (a.x() + a.width()) as f64
+                || y < a.y() as f64
+                || y > (a.y() + a.height()) as f64
+            {
+                close_outside();
+            }
+        });
+        window.add_controller(outside_click);
 
         // Safety net: clean up PID if the window is destroyed by the compositor
         window.connect_destroy(|_| cleanup_pid());
 
-        backdrop.present();
         window.present();
         search.grab_focus();
     });
