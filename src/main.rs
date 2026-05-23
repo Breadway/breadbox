@@ -331,7 +331,7 @@ fn run_ui(entries: Vec<(String, String)>) {
 
         window.init_layer_shell();
         window.set_layer(Layer::Overlay);
-        window.set_keyboard_mode(KeyboardMode::Exclusive);
+        window.set_keyboard_mode(KeyboardMode::OnDemand);
         window.set_anchor(Edge::Top, true);
         window.set_exclusive_zone(-1);
 
@@ -402,8 +402,10 @@ fn run_ui(entries: Vec<(String, String)>) {
             list_f.select_row(first_vis.as_ref());
         });
 
-        // Keyboard: Esc, Enter, arrows — keep focus in search bar
+        // Keyboard: Esc, Enter, arrows — capture phase on window so we
+        // intercept before SearchEntry's own handlers consume them
         let key_ctrl = EventControllerKey::new();
+        key_ctrl.set_propagation_phase(gtk4::PropagationPhase::Capture);
         let window_k = window.clone();
         let list_k = list.clone();
         key_ctrl.connect_key_pressed(move |_, key, _, _| {
@@ -461,7 +463,7 @@ fn run_ui(entries: Vec<(String, String)>) {
                 _ => glib::Propagation::Proceed,
             }
         });
-        search.add_controller(key_ctrl);
+        window.add_controller(key_ctrl);
 
         // Click to launch
         let window_a = window.clone();
