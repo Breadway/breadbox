@@ -5,6 +5,7 @@ use std::{
     io::{BufRead, BufReader, Write},
     path::{Path, PathBuf},
     process::{Command, Stdio},
+    rc::Rc,
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -21,7 +22,10 @@ use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 const CACHE_TIMEOUT_SECS: u64 = 86400;
 
 const CSS: &str = "
-window, .background {
+window {
+    background-color: transparent;
+}
+.launcher-bg {
     background-color: #1e1e2e;
 }
 searchentry {
@@ -324,18 +328,45 @@ fn run_ui(entries: Vec<(String, String)>) {
             gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
         );
 
+        // Full-screen transparent backdrop at Layer::Top — catches clicks
+        // outside the launcher and closes it. Sits below the launcher
+        // (Layer::Overlay) so it never intercepts clicks on the UI itself.
+        let backdrop = ApplicationWindow::builder()
+            .application(app)
+            .build();
+        backdrop.init_layer_shell();
+        backdrop.set_layer(Layer::Top);
+        backdrop.set_keyboard_mode(KeyboardMode::None);
+        for edge in [Edge::Top, Edge::Bottom, Edge::Left, Edge::Right] {
+            backdrop.set_anchor(edge, true);
+        }
+
+        // Main launcher window
         let window = ApplicationWindow::builder()
             .application(app)
             .default_width(700)
             .build();
-
         window.init_layer_shell();
         window.set_layer(Layer::Overlay);
-        window.set_keyboard_mode(KeyboardMode::OnDemand);
+        // Exclusive: compositor won't hand focus to another window on pointer
+        // leave, so the backdrop (not a focus event) handles click-outside.
+        window.set_keyboard_mode(KeyboardMode::Exclusive);
         window.set_anchor(Edge::Top, true);
         window.set_exclusive_zone(-1);
 
+        // Shared close: dismisses both windows and cleans up the PID file.
+        let close_all: Rc<dyn Fn()> = Rc::new({
+            let w = window.clone();
+            let b = backdrop.clone();
+            move || {
+                cleanup_pid();
+                w.close();
+                b.close();
+            }
+        });
+
         let vbox = GBox::new(Orientation::Vertical, 0);
+        vbox.add_css_class("launcher-bg");
 
         let search = SearchEntry::new();
         search.set_placeholder_text(Some("breadbox"));
@@ -406,14 +437,13 @@ fn run_ui(entries: Vec<(String, String)>) {
         // intercept before SearchEntry's own handlers consume them
         let key_ctrl = EventControllerKey::new();
         key_ctrl.set_propagation_phase(gtk4::PropagationPhase::Capture);
-        let window_k = window.clone();
+        let close_k = Rc::clone(&close_all);
         let list_k = list.clone();
         key_ctrl.connect_key_pressed(move |_, key, _, _| {
             use gtk4::gdk::Key;
             match key {
                 Key::Escape => {
-                    cleanup_pid();
-                    window_k.close();
+                    close_k();
                     glib::Propagation::Stop
                 }
                 Key::Return | Key::KP_Enter => {
@@ -421,8 +451,7 @@ fn run_ui(entries: Vec<(String, String)>) {
                         let action = get_row_data(&row, "action");
                         if !action.is_empty() {
                             do_launch(&action);
-                            cleanup_pid();
-                            window_k.close();
+                            close_k();
                         }
                     }
                     glib::Propagation::Stop
@@ -465,29 +494,26 @@ fn run_ui(entries: Vec<(String, String)>) {
         });
         window.add_controller(key_ctrl);
 
-        // Click to launch
-        let window_a = window.clone();
+        // Row click / Enter activates launch
+        let close_a = Rc::clone(&close_all);
         list.connect_row_activated(move |_, row| {
             let action = get_row_data(row, "action");
             if !action.is_empty() {
                 do_launch(&action);
-                cleanup_pid();
-                window_a.close();
+                close_a();
             }
         });
 
-        // Close when focus leaves the window (click outside, alt-tab, etc.)
-        let window_foc = window.clone();
-        let focus_ctrl = gtk4::EventControllerFocus::new();
-        focus_ctrl.connect_leave(move |_| {
-            cleanup_pid();
-            window_foc.close();
-        });
-        window.add_controller(focus_ctrl);
+        // Backdrop click: user clicked outside the launcher
+        let close_bd = Rc::clone(&close_all);
+        let click = gtk4::GestureClick::new();
+        click.connect_released(move |_, _, _, _| close_bd());
+        backdrop.add_controller(click);
 
-        // Cleanup pid when window is destroyed for any reason
+        // Safety net: clean up PID if the window is destroyed by the compositor
         window.connect_destroy(|_| cleanup_pid());
 
+        backdrop.present();
         window.present();
         search.grab_focus();
     });
