@@ -331,7 +331,7 @@ fn run_ui(entries: Vec<(String, String)>) {
 
         window.init_layer_shell();
         window.set_layer(Layer::Overlay);
-        window.set_keyboard_mode(KeyboardMode::OnDemand);
+        window.set_keyboard_mode(KeyboardMode::Exclusive);
         window.set_anchor(Edge::Top, true);
         window.set_exclusive_zone(-1);
 
@@ -473,6 +473,15 @@ fn run_ui(entries: Vec<(String, String)>) {
                 window_a.close();
             }
         });
+
+        // Close when focus leaves the window (click outside, alt-tab, etc.)
+        let window_foc = window.clone();
+        let focus_ctrl = gtk4::EventControllerFocus::new();
+        focus_ctrl.connect_leave(move |_| {
+            cleanup_pid();
+            window_foc.close();
+        });
+        window.add_controller(focus_ctrl);
 
         // Cleanup pid when window is destroyed for any reason
         window.connect_destroy(|_| cleanup_pid());
