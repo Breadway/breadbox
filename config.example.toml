@@ -1,0 +1,19 @@
+# breadbox configuration
+# Copy to ~/.config/breadbox/config.toml
+
+# Each [[context]] block matches a Hyprland workspace by name.
+# The "default" context is used when no named context matches.
+# priority lists app names (case-insensitive substring match against Name= and StartupWMClass=).
+# Matched apps are sorted first, in priority order; everything else is alphabetical.
+
+[[context]]
+name = "default"
+priority = ["firefox", "code", "obsidian", "kitty"]
+
+# [[context]]
+# name = "2"
+# priority = ["slack", "discord", "telegram"]
+
+# [[context]]
+# name = "work"
+# priority = ["code", "alacritty", "postman"]
