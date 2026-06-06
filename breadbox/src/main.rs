@@ -1,3 +1,4 @@
+use bread_theme::{hex_to_rgba, load_palette, Palette};
 use std::{
     collections::HashMap,
     env,
@@ -10,7 +11,7 @@ use std::{
 };
 
 use breadbox_shared::{
-    config_dir, home_dir, load_all_desktop_entries, Config, DesktopEntry, IconCache,
+    config_dir, load_all_desktop_entries, Config, DesktopEntry, IconCache,
 };
 use gtk4::{
     gdk::Display,
@@ -124,74 +125,28 @@ fn matches_term(field: &str, term: &str) -> bool {
 
 // ---- Theming ----------------------------------------------------------------
 
-#[derive(Debug)]
-struct Palette {
-    bg: String,
-    surface: String,
-    fg: String,
-    accent: String,
-}
-
-impl Palette {
-    fn catppuccin_mocha() -> Self {
-        Palette {
-            bg: "#1e1e2e".into(),
-            surface: "#181825".into(),
-            fg: "#cdd6f4".into(),
-            accent: "#89b4fa".into(),
-        }
-    }
-
-    fn from_wal() -> Option<Self> {
-        let path = env::var("XDG_CACHE_HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| home_dir().join(".cache"))
-            .join("wal/colors.json");
-        let content = fs::read_to_string(&path).ok()?;
-        let v: serde_json::Value = serde_json::from_str(&content).ok()?;
-
-        let spec = &v["special"];
-        let cols = &v["colors"];
-
-        let bg = spec["background"].as_str()?.to_string();
-        let surface = cols["color0"].as_str().unwrap_or(&bg).to_string();
-        let fg = cols["color15"].as_str().unwrap_or("#cdd6f4").to_string();
-        let accent = cols["color1"].as_str().unwrap_or("#89b4fa").to_string();
-
-        Some(Palette { bg, surface, fg, accent })
-    }
-}
-
-fn hex_to_rgba(hex: &str, alpha: f32) -> String {
-    let h = hex.trim_start_matches('#');
-    let r = u8::from_str_radix(h.get(0..2).unwrap_or("00"), 16).unwrap_or(0);
-    let g = u8::from_str_radix(h.get(2..4).unwrap_or("00"), 16).unwrap_or(0);
-    let b = u8::from_str_radix(h.get(4..6).unwrap_or("00"), 16).unwrap_or(0);
-    format!("rgba({r}, {g}, {b}, {alpha})")
-}
-
 fn build_css(p: &Palette) -> String {
-    let bg_panel = hex_to_rgba(&p.bg, 0.60);
+    let bg_panel = hex_to_rgba(&p.background, 0.60);
     format!(
-        "* {{ font-family: 'JetBrainsMono Nerd Font Mono', monospace; font-size: 14px; }}\
+        "* {{ font-family: 'Varela Round', sans-serif; font-size: 14px; }}\
          window {{ background-color: transparent; }}\
          .launcher-bg {{ background-color: {bg_panel}; border-radius: 8px;\
              box-shadow: 0 8px 32px rgba(0,0,0,0.6); }}\
          searchentry {{ background-color: {surface}; color: {fg}; caret-color: {accent};\
              border: none; outline: none; box-shadow: none;\
-             padding: 12px 16px; border-radius: 4px 4px 0 0; }}\
+             padding: 12px 16px; border-radius: 6px 6px 0 0; }}\
          listbox {{ background-color: transparent; padding: 4px; }}\
-         row {{ padding: 5px 10px; color: {fg}; background-color: transparent;\
-             border-radius: 4px; }}\
+         row {{ padding: 8px 12px; color: {fg}; background-color: transparent;\
+             border-radius: 6px; }}\
          row:hover {{ background-color: {surface}; }}\
          row:selected {{ background-color: {surface}; }}\
          .app-name {{ font-size: 14px; }}\
          .app-muted {{ color: {fg}; opacity: 0.6; font-size: 12px; }}\
          image {{ margin-right: 8px; }}",
         bg_panel = bg_panel,
-        surface = p.surface,
-        fg = p.fg,
-        accent = p.accent,
+        surface  = p.color0,
+        fg       = p.foreground,
+        accent   = p.color4,
     )
 }
 
@@ -334,15 +289,11 @@ fn run_ui(entries: Vec<DesktopEntry>, css: String) {
         );
 
         // User CSS override
-        let user_css_path = config_dir().join("style.css");
-        if user_css_path.exists() {
-            let user_provider = CssProvider::new();
-            user_provider.load_from_path(&user_css_path);
-            gtk4::style_context_add_provider_for_display(
-                &Display::default().expect("no display"),
-                &user_provider,
-                gtk4::STYLE_PROVIDER_PRIORITY_USER,
-            );
+        {
+            use std::cell::RefCell;
+            let user_css_path = config_dir().join("style.css");
+            let user_cell: RefCell<Option<CssProvider>> = RefCell::new(None);
+            bread_theme::gtk::apply_user_css(&user_css_path, &user_cell);
         }
 
         // Full-screen transparent window; clicks outside the launcher panel close it.
@@ -557,7 +508,7 @@ fn main() {
     let manifest = load_manifest();
     let entries = load_sorted_entries(&manifest, &priority);
 
-    let palette = Palette::from_wal().unwrap_or_else(Palette::catppuccin_mocha);
+    let palette = load_palette();
     let css = build_css(&palette);
 
     run_ui(entries, css);
