@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     env,
     fs::{self, File},
     io::{BufRead, BufReader},
@@ -212,6 +213,38 @@ impl IconCache {
 impl Default for IconCache {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+// ---- Launch history ---------------------------------------------------------
+
+pub struct LaunchHistory {
+    counts: HashMap<String, u32>,
+    path: PathBuf,
+}
+
+impl LaunchHistory {
+    pub fn load() -> Self {
+        let path = cache_dir().join("history.json");
+        let counts = fs::read_to_string(&path)
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_default();
+        LaunchHistory { counts, path }
+    }
+
+    pub fn count(&self, name: &str) -> u32 {
+        self.counts.get(name).copied().unwrap_or(0)
+    }
+
+    pub fn increment(&mut self, name: &str) {
+        *self.counts.entry(name.to_string()).or_insert(0) += 1;
+    }
+
+    pub fn save(&self) {
+        if let Ok(json) = serde_json::to_string(&self.counts) {
+            let _ = fs::write(&self.path, json);
+        }
     }
 }
 
