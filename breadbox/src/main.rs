@@ -1,5 +1,6 @@
 use bread_theme::{hex_to_rgba, load_palette, Palette};
 use std::{
+    cell::RefCell,
     collections::HashMap,
     env,
     fs,
@@ -11,7 +12,7 @@ use std::{
 };
 
 use breadbox_shared::{
-    config_dir, load_all_desktop_entries, Config, DesktopEntry, IconCache,
+    config_dir, load_all_desktop_entries, Config, DesktopEntry, IconCache, LaunchHistory,
 };
 use gtk4::{
     gdk::Display,
@@ -58,6 +59,7 @@ fn load_manifest() -> HashMap<String, PathBuf> {
 fn load_sorted_entries(
     manifest: &HashMap<String, PathBuf>,
     priority: &[String],
+    history: &LaunchHistory,
 ) -> Vec<DesktopEntry> {
     let mut entries = load_all_desktop_entries();
 
@@ -79,7 +81,11 @@ fn load_sorted_entries(
             (Some(i), Some(j)) => i.cmp(&j),
             (Some(_), None) => std::cmp::Ordering::Less,
             (None, Some(_)) => std::cmp::Ordering::Greater,
-            (None, None) => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
+            (None, None) => {
+                // Most-launched first, then alphabetical
+                history.count(&b.name).cmp(&history.count(&a.name))
+                    .then(a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+            }
         }
     });
 
@@ -230,6 +236,17 @@ fn fuzzy_matches(pattern: &str, text: &str) -> bool {
     true
 }
 
+fn fuzzy_score(query: &str, entry: &DesktopEntry) -> u32 {
+    let q = query.to_lowercase();
+    let name = entry.name.to_lowercase();
+    let wm = entry.wm_class.as_deref().unwrap_or("").to_lowercase();
+    if name == q || wm == q { return 0; }
+    if name.starts_with(&q) { return 1; }
+    if name.contains(&q) { return 2; }
+    if wm.starts_with(&q) || wm.contains(&q) { return 3; }
+    4 // subsequence match
+}
+
 // ---- PID file toggle --------------------------------------------------------
 
 fn pid_file() -> PathBuf {
@@ -273,10 +290,13 @@ fn get_row_entry(row: &gtk4::ListBoxRow) -> Option<DesktopEntry> {
     }
 }
 
-fn run_ui(entries: Vec<DesktopEntry>, css: String) {
+fn run_ui(entries: Vec<DesktopEntry>, css: String, history: LaunchHistory) {
     let app = Application::builder()
         .application_id("com.breadway.breadbox")
         .build();
+
+    let history_rc = Rc::new(RefCell::new(history));
+    let query_rc: Rc<RefCell<String>> = Rc::new(RefCell::new(String::new()));
 
     app.connect_activate(move |app| {
         // Base CSS
@@ -290,7 +310,6 @@ fn run_ui(entries: Vec<DesktopEntry>, css: String) {
 
         // User CSS override
         {
-            use std::cell::RefCell;
             let user_css_path = config_dir().join("style.css");
             let user_cell: RefCell<Option<CssProvider>> = RefCell::new(None);
             bread_theme::gtk::apply_user_css(&user_css_path, &user_cell);
@@ -334,7 +353,7 @@ fn run_ui(entries: Vec<DesktopEntry>, css: String) {
         let list = ListBox::new();
         list.set_selection_mode(SelectionMode::Browse);
 
-        for entry in &entries {
+        for (idx, entry) in entries.iter().enumerate() {
             let row = gtk4::ListBoxRow::new();
             let hbox = GBox::new(Orientation::Horizontal, 0);
             hbox.set_margin_start(6);
@@ -360,8 +379,34 @@ fn run_ui(entries: Vec<DesktopEntry>, css: String) {
 
             row.set_child(Some(&hbox));
             unsafe { row.set_data("entry", entry.clone()) };
+            unsafe { row.set_data("initial_order", idx as u32) };
             list.append(&row);
         }
+
+        // Sort by match quality + launch count when a query is active;
+        // fall back to insertion order (priority + launch frequency) when empty.
+        let sort_query = Rc::clone(&query_rc);
+        let sort_history = Rc::clone(&history_rc);
+        list.set_sort_func(move |row_a, row_b| {
+            let query = sort_query.borrow();
+            if query.is_empty() {
+                let oa = unsafe { row_a.data::<u32>("initial_order").map_or(u32::MAX, |p| *p.as_ref()) };
+                let ob = unsafe { row_b.data::<u32>("initial_order").map_or(u32::MAX, |p| *p.as_ref()) };
+                return oa.cmp(&ob).into();
+            }
+            let (Some(ea), Some(eb)) = (get_row_entry(row_a), get_row_entry(row_b)) else {
+                return std::cmp::Ordering::Equal.into();
+            };
+            let sa = fuzzy_score(&query, &ea);
+            let sb = fuzzy_score(&query, &eb);
+            let history = sort_history.borrow();
+            let ca = history.count(&ea.name);
+            let cb = history.count(&eb.name);
+            sa.cmp(&sb)
+                .then(cb.cmp(&ca))
+                .then(ea.name.to_lowercase().cmp(&eb.name.to_lowercase()))
+                .into()
+        });
 
         if let Some(first) = list.row_at_index(0) {
             list.select_row(Some(&first));
@@ -373,10 +418,11 @@ fn run_ui(entries: Vec<DesktopEntry>, css: String) {
 
         // Filter on keystroke
         let list_f = list.clone();
+        let filter_query = Rc::clone(&query_rc);
         search.connect_changed(move |entry| {
             let text = entry.text();
             let query = text.as_str();
-            let mut first_vis: Option<gtk4::ListBoxRow> = None;
+            *filter_query.borrow_mut() = query.to_string();
             let mut i = 0i32;
             while let Some(row) = list_f.row_at_index(i) {
                 let vis = get_row_entry(&row)
@@ -389,11 +435,12 @@ fn run_ui(entries: Vec<DesktopEntry>, css: String) {
                     })
                     .unwrap_or(false);
                 row.set_visible(vis);
-                if vis && first_vis.is_none() {
-                    first_vis = Some(row);
-                }
                 i += 1;
             }
+            list_f.invalidate_sort();
+            let first_vis = (0i32..).find_map(|j| {
+                list_f.row_at_index(j).filter(|r| r.is_visible())
+            });
             list_f.select_row(first_vis.as_ref());
         });
 
@@ -402,6 +449,7 @@ fn run_ui(entries: Vec<DesktopEntry>, css: String) {
         key_ctrl.set_propagation_phase(gtk4::PropagationPhase::Capture);
         let close_k = Rc::clone(&close_all);
         let list_k = list.clone();
+        let history_k = Rc::clone(&history_rc);
         key_ctrl.connect_key_pressed(move |_, key, _, _| {
             use gtk4::gdk::Key;
             match key {
@@ -412,6 +460,8 @@ fn run_ui(entries: Vec<DesktopEntry>, css: String) {
                 Key::Return | Key::KP_Enter => {
                     if let Some(row) = list_k.selected_row() {
                         if let Some(entry) = get_row_entry(&row) {
+                            history_k.borrow_mut().increment(&entry.name);
+                            history_k.borrow().save();
                             do_launch(&entry);
                             close_k();
                         }
@@ -458,8 +508,11 @@ fn run_ui(entries: Vec<DesktopEntry>, css: String) {
 
         // Row click launches
         let close_a = Rc::clone(&close_all);
+        let history_a = Rc::clone(&history_rc);
         list.connect_row_activated(move |_, row| {
             if let Some(entry) = get_row_entry(row) {
+                history_a.borrow_mut().increment(&entry.name);
+                history_a.borrow().save();
                 do_launch(&entry);
                 close_a();
             }
@@ -505,11 +558,12 @@ fn main() {
         .map(|c| c.priority.clone())
         .unwrap_or_default();
 
+    let history = LaunchHistory::load();
     let manifest = load_manifest();
-    let entries = load_sorted_entries(&manifest, &priority);
+    let entries = load_sorted_entries(&manifest, &priority, &history);
 
     let palette = load_palette();
     let css = build_css(&palette);
 
-    run_ui(entries, css);
+    run_ui(entries, css, history);
 }
