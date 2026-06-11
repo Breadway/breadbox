@@ -2,6 +2,7 @@ name = "breadbox"
 description = "App launcher for Hyprland / Wayland"
 binaries = ["breadbox", "breadbox-sync"]
 system_deps = ["gtk4", "gtk4-layer-shell", "librsvg"]
+optional_system_deps = ["hyprland"]
 bread_deps = []
 
 [[service]]
