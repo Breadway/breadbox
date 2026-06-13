@@ -7,6 +7,10 @@ pkgdesc="App launcher for Hyprland / Wayland"
 arch=('x86_64')
 url="https://github.com/Breadway/breadbox"
 license=('MIT')
+# Some Rust deps (ring/mlua) build vendored C/asm into static archives; makepkg's
+# default -flto=auto emits GCC LTO bitcode the Rust (lld) link cannot read,
+# causing undefined-symbol errors. Disable LTO.
+options=(!lto)
 depends=('gtk4' 'gtk4-layer-shell' 'librsvg')
 optdepends=(
   'hyprland: window and workspace integration'
