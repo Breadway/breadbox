@@ -39,7 +39,7 @@ dependencies = [
 
 [[package]]
 name = "breadbox"
-version = "0.2.2"
+version = "0.2.4"
 dependencies = [
  "bread-theme",
  "breadbox-shared",
@@ -50,7 +50,7 @@ dependencies = [
 
 [[package]]
 name = "breadbox-shared"
-version = "0.2.2"
+version = "0.2.4"
 dependencies = [
  "serde",
  "serde_json",
@@ -59,7 +59,7 @@ dependencies = [
 
 [[package]]
 name = "breadbox-sync"
-version = "0.2.2"
+version = "0.2.4"
 dependencies = [
  "breadbox-shared",
  "serde_json",
