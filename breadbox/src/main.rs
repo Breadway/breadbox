@@ -133,9 +133,10 @@ fn matches_term(field: &str, term: &str) -> bool {
 
 fn build_css(p: &Palette) -> String {
     let bg_panel = hex_to_rgba(&p.background, 0.60);
+    // breadbox-specific rules only — fonts, palette, and generic widgets come
+    // from the shared ecosystem stylesheet (applied first in connect_activate).
     format!(
-        "* {{ font-family: 'Varela Round', sans-serif; font-size: 14px; }}\
-         window {{ background-color: transparent; }}\
+        "window {{ background-color: transparent; }}\
          .launcher-bg {{ background-color: {bg_panel}; border-radius: 8px;\
              box-shadow: 0 8px 32px rgba(0,0,0,0.6); }}\
          searchentry {{ background-color: {surface}; color: {fg}; caret-color: {accent};\
@@ -299,7 +300,10 @@ fn run_ui(entries: Vec<DesktopEntry>, css: String, history: LaunchHistory) {
     let query_rc: Rc<RefCell<String>> = Rc::new(RefCell::new(String::new()));
 
     app.connect_activate(move |app| {
-        // Base CSS
+        // Shared ecosystem base (fonts, palette, generic widgets) first, then
+        // breadbox-specific CSS layered on top at APPLICATION priority.
+        bread_theme::gtk::apply_shared();
+
         let provider = CssProvider::new();
         provider.load_from_string(&css);
         gtk4::style_context_add_provider_for_display(
