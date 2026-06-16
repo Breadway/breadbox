@@ -28,8 +28,8 @@ checksum = "b4388bee8683e3d04af747c73422af53102d2bd24d9eadb6cbc100baef4b43f8"
 
 [[package]]
 name = "bread-theme"
-version = "0.1.0"
-source = "git+https://github.com/Breadway/bread-ecosystem?tag=v0.1.0#6b5f4f475f66a645b08cb865e6dda8228d23679b"
+version = "0.2.3"
+source = "git+https://github.com/Breadway/bread-ecosystem?tag=v0.2.6#0c8c5c00e435fedff4f81e36d603424c153519a9"
 dependencies = [
  "dirs",
  "gtk4",
@@ -39,7 +39,7 @@ dependencies = [
 
 [[package]]
 name = "breadbox"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "bread-theme",
  "breadbox-shared",
@@ -50,7 +50,7 @@ dependencies = [
 
 [[package]]
 name = "breadbox-shared"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "serde",
  "serde_json",
@@ -59,7 +59,7 @@ dependencies = [
 
 [[package]]
 name = "breadbox-sync"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "breadbox-shared",
  "serde_json",
