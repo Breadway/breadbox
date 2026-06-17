@@ -9,7 +9,7 @@ name = "breadbox"
 path = "src/main.rs"
 
 [dependencies]
-bread-theme = { git = "https://github.com/Breadway/bread-ecosystem", tag = "v0.2.7", features = ["gtk"] }
+bread-theme = { git = "https://github.com/Breadway/bread-ecosystem", tag = "v0.2.8", features = ["gtk"] }
 breadbox-shared = { path = "../breadbox-shared" }
 gtk4 = { version = "0.11", features = ["v4_12"] }
 gtk4-layer-shell = "0.8"
