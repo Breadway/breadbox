@@ -1,4 +1,4 @@
-use bread_theme::{hex_to_rgba, load_palette, Palette};
+use bread_theme::{hex_to_rgba, ink_on, load_palette, Palette};
 use std::{
     cell::RefCell,
     collections::HashMap,
@@ -15,7 +15,6 @@ use breadbox_shared::{
     config_dir, load_all_desktop_entries, Config, DesktopEntry, IconCache, LaunchHistory,
 };
 use gtk4::{
-    gdk::Display,
     glib,
     pango::EllipsizeMode,
     prelude::*,
@@ -135,25 +134,30 @@ fn build_css(p: &Palette) -> String {
     let bg_panel = hex_to_rgba(&p.background, 0.60);
     // breadbox-specific rules only — fonts, palette, and generic widgets come
     // from the shared ecosystem stylesheet (applied first in connect_activate).
+    // Colour is set on each surface (panel, search box, hovered/selected row) so
+    // child labels inherit the legible ink for that background. `on_*` are
+    // luminance-picked black/white — the pywal hues are untouched. Without this a
+    // light `surface` slot makes the selected row's text vanish.
     format!(
         "window {{ background-color: transparent; }}\
-         .launcher-bg {{ background-color: {bg_panel}; border-radius: 8px;\
+         .launcher-bg {{ background-color: {bg_panel}; color: {on_bg}; border-radius: 8px;\
              box-shadow: 0 8px 32px rgba(0,0,0,0.6); }}\
-         searchentry {{ background-color: {surface}; color: {fg}; caret-color: {accent};\
+         searchentry {{ background-color: {surface}; color: {on_surface}; caret-color: {accent};\
              border: none; outline: none; box-shadow: none;\
              padding: 12px 16px; border-radius: 6px 6px 0 0; }}\
          listbox {{ background-color: transparent; padding: 4px; }}\
-         row {{ padding: 8px 12px; color: {fg}; background-color: transparent;\
+         row {{ padding: 8px 12px; color: {on_bg}; background-color: transparent;\
              border-radius: 6px; }}\
-         row:hover {{ background-color: {surface}; }}\
-         row:selected {{ background-color: {surface}; }}\
+         row:hover {{ background-color: {surface}; color: {on_surface}; }}\
+         row:selected {{ background-color: {surface}; color: {on_surface}; }}\
          .app-name {{ font-size: 14px; }}\
-         .app-muted {{ color: {fg}; opacity: 0.6; font-size: 12px; }}\
+         .app-muted {{ opacity: 0.6; font-size: 12px; }}\
          image {{ margin-right: 8px; }}",
-        bg_panel = bg_panel,
-        surface  = p.color0,
-        fg       = p.foreground,
-        accent   = p.color4,
+        bg_panel   = bg_panel,
+        surface    = p.color0,
+        accent     = p.color4,
+        on_bg      = ink_on(&p.background),
+        on_surface = ink_on(&p.color0),
     )
 }
 
@@ -291,7 +295,7 @@ fn get_row_entry(row: &gtk4::ListBoxRow) -> Option<DesktopEntry> {
     }
 }
 
-fn run_ui(entries: Vec<DesktopEntry>, css: String, history: LaunchHistory) {
+fn run_ui(entries: Vec<DesktopEntry>, history: LaunchHistory) {
     let app = Application::builder()
         .application_id("com.breadway.breadbox")
         .build();
@@ -301,16 +305,10 @@ fn run_ui(entries: Vec<DesktopEntry>, css: String, history: LaunchHistory) {
 
     app.connect_activate(move |app| {
         // Shared ecosystem base (fonts, palette, generic widgets) first, then
-        // breadbox-specific CSS layered on top at APPLICATION priority.
+        // breadbox-specific CSS layered on top — both hot-reload on
+        // `bread-theme reload` (the closure re-reads the pywal palette).
         bread_theme::gtk::apply_shared();
-
-        let provider = CssProvider::new();
-        provider.load_from_string(&css);
-        gtk4::style_context_add_provider_for_display(
-            &Display::default().expect("no display"),
-            &provider,
-            gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
-        );
+        bread_theme::gtk::apply_app_css(|| build_css(&load_palette()));
 
         // User CSS override
         {
@@ -566,8 +564,5 @@ fn main() {
     let manifest = load_manifest();
     let entries = load_sorted_entries(&manifest, &priority, &history);
 
-    let palette = load_palette();
-    let css = build_css(&palette);
-
-    run_ui(entries, css, history);
+    run_ui(entries, history);
 }
