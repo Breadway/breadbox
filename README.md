@@ -12,7 +12,8 @@ breadbox          GTK4 layer-shell launcher
 
 - Layer-shell window, centered 600 px wide, keyboard-exclusive
 - Reads the active Hyprland workspace and sorts apps by context priority
-- Fuzzy filtering as you type; Enter launches, Escape closes
+- Launch history: non-priority apps sort by most-launched first, then alphabetically
+- Fuzzy filtering as you type; Enter or click to launch, Escape or click outside to close
 - App icons loaded from the resolved icon cache (see `breadbox-sync`)
 - pywal palette auto-detected from `~/.cache/wal/colors.json`, falls back to Catppuccin Mocha
 - User CSS override at `~/.config/breadbox/style.css`
@@ -88,10 +89,9 @@ breadbox-sync
 ```
 
 Icon resolution order:
-1. System icon theme (`~/.local/share/icons`, `/usr/share/icons`, `/usr/share/pixmaps`) — 64 px > 48 px PNG, then SVG
-2. Flathub media server — for reverse-DNS app IDs (e.g. `org.gnome.Gedit`)
-3. icon.horse — downloaded and cached
-4. `application-x-executable` fallback from system theme
+1. System icon theme (`~/.local/share/icons`, `/usr/share/icons`, `/usr/share/pixmaps`) — 64 px > 48 px > 128 px > 32 px > 256 px PNG, then SVG
+2. Flathub appstream CDN — for reverse-DNS app IDs (e.g. `org.gnome.Gedit`)
+3. `application-x-executable` fallback from system theme
 
 ### Systemd service (run on login)
 
