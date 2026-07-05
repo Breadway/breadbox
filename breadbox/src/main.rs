@@ -252,6 +252,42 @@ fn fuzzy_score(query: &str, entry: &DesktopEntry) -> u32 {
     4 // subsequence match
 }
 
+/// Same tiers as `fuzzy_score`, but `None` when nothing matches at all
+/// (rather than falling through to a bare-subsequence score), and folds in
+/// `exec` as a tier-4 (weakest) match too — used for filtering, not sorting.
+/// Tier 4 is loose enough that e.g. querying "zen" matches "Avahi Zeroconf
+/// Browser" (z…e…n as a subsequence) alongside the real "Zen Browser" hit;
+/// the filter hides tier-4-only rows whenever a tier ≤2 (name-based) match
+/// exists elsewhere in the list, so that kind of noise only shows up when
+/// it's the best any entry can do.
+fn match_tier(query: &str, entry: &DesktopEntry) -> Option<u32> {
+    if query.is_empty() {
+        return Some(0);
+    }
+    let q = query.to_lowercase();
+    let name = entry.name.to_lowercase();
+    let wm = entry.wm_class.as_deref().unwrap_or("").to_lowercase();
+    if name == q || wm == q {
+        return Some(0);
+    }
+    if name.starts_with(&q) {
+        return Some(1);
+    }
+    if name.contains(&q) {
+        return Some(2);
+    }
+    if wm.starts_with(&q) || wm.contains(&q) {
+        return Some(3);
+    }
+    if fuzzy_matches(query, &entry.name)
+        || entry.wm_class.as_deref().is_some_and(|w| fuzzy_matches(query, w))
+        || fuzzy_matches(query, &entry.exec)
+    {
+        return Some(4);
+    }
+    None
+}
+
 // ---- PID file toggle --------------------------------------------------------
 
 fn pid_file() -> PathBuf {
@@ -344,7 +380,7 @@ fn run_ui(entries: Vec<DesktopEntry>, history: LaunchHistory) {
         vbox.set_size_request(600, -1);
 
         let search = SearchEntry::new();
-        search.set_placeholder_text(Some("breadbox"));
+        search.set_placeholder_text(Some("Search apps…"));
         vbox.append(&search);
 
         let scroll = ScrolledWindow::new();
@@ -425,19 +461,25 @@ fn run_ui(entries: Vec<DesktopEntry>, history: LaunchHistory) {
             let text = entry.text();
             let query = text.as_str();
             *filter_query.borrow_mut() = query.to_string();
+
+            // Two passes: first collect each row's match tier, then decide
+            // visibility — a tier-4 (bare subsequence) row only gets hidden
+            // once we know whether some *other* row has a real tier ≤2 hit.
+            let mut rows = Vec::new();
             let mut i = 0i32;
             while let Some(row) = list_f.row_at_index(i) {
-                let vis = get_row_entry(&row)
-                    .map(|e| {
-                        fuzzy_matches(query, &e.name)
-                            || e.wm_class
-                                .as_deref()
-                                .is_some_and(|w| fuzzy_matches(query, w))
-                            || fuzzy_matches(query, &e.exec)
-                    })
-                    .unwrap_or(false);
-                row.set_visible(vis);
+                let tier = get_row_entry(&row).and_then(|e| match_tier(query, &e));
+                rows.push((row, tier));
                 i += 1;
+            }
+            let has_direct_hit = rows.iter().any(|(_, t)| matches!(t, Some(0..=2)));
+            for (row, tier) in &rows {
+                let vis = match tier {
+                    None => false,
+                    Some(4) if has_direct_hit => false,
+                    Some(_) => true,
+                };
+                row.set_visible(vis);
             }
             list_f.invalidate_sort();
             let first_vis = (0i32..).find_map(|j| {

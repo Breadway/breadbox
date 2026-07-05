@@ -1,6 +1,6 @@
 [package]
 name = "breadbox-sync"
-version = "0.2.4"
+version = "0.2.6"
 edition = "2021"
 license = "MIT"
 
