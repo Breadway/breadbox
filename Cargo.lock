@@ -29,7 +29,7 @@ checksum = "b4388bee8683e3d04af747c73422af53102d2bd24d9eadb6cbc100baef4b43f8"
 [[package]]
 name = "bread-theme"
 version = "0.2.3"
-source = "git+https://github.com/Breadway/bread-ecosystem?tag=v0.2.8#77417d552130281ff787e07d52541eb25e9d533b"
+source = "git+https://github.com/Breadway/bread-ecosystem?tag=v0.2.10#17d1bb85801b9a8c195b64c02d288cd662c9c780"
 dependencies = [
  "dirs",
  "gtk4",
@@ -355,7 +355,7 @@ dependencies = [
  "gobject-sys",
  "libc",
  "system-deps",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -1257,12 +1257,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "windows-link"
-version = "0.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f0805222e57f7521d6a62e36fa9163bc891acd422f971defe97d64e70d0a4fe5"
-
-[[package]]
 name = "windows-sys"
 version = "0.48.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1278,15 +1272,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "282be5f36a8ce781fad8c8ae18fa3f9beff57ec1b52cb3de0789201425d9a33d"
 dependencies = [
  "windows-targets 0.52.6",
-]
-
-[[package]]
-name = "windows-sys"
-version = "0.61.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ae137229bcbd6cdf0f7b80a31df61766145077ddf49416a728b02cb3921ff3fc"
-dependencies = [
- "windows-link",
 ]
 
 [[package]]
