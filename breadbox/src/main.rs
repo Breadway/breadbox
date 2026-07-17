@@ -4,8 +4,6 @@ use std::{
     collections::HashMap,
     env,
     fs,
-    io::{Read, Write},
-    os::unix::net::UnixStream,
     path::{Path, PathBuf},
     process::{Command, Stdio},
     rc::Rc,
@@ -18,28 +16,9 @@ use gtk4::{
     glib,
     pango::EllipsizeMode,
     prelude::*,
-    Application, ApplicationWindow, Box as GBox, CssProvider, EventControllerKey, Label,
+    Application, Box as GBox, CssProvider, EventControllerKey, Label,
     ListBox, Orientation, PolicyType, ScrolledWindow, SearchEntry, SelectionMode,
 };
-use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
-
-// ---- Hyprland IPC -----------------------------------------------------------
-
-fn get_active_workspace() -> Option<String> {
-    let sig = env::var("HYPRLAND_INSTANCE_SIGNATURE").ok()?;
-    let rt = env::var("XDG_RUNTIME_DIR").ok()?;
-    let socket_path = format!("{}/hypr/{}/.socket.sock", rt, sig);
-
-    let mut stream = UnixStream::connect(&socket_path).ok()?;
-    stream.write_all(b"j/activeworkspace").ok()?;
-    stream.shutdown(std::net::Shutdown::Write).ok()?;
-
-    let mut response = String::new();
-    stream.read_to_string(&mut response).ok()?;
-
-    let v: serde_json::Value = serde_json::from_str(&response).ok()?;
-    v["name"].as_str().map(|s| s.to_string())
-}
 
 // ---- Manifest ---------------------------------------------------------------
 
@@ -288,40 +267,6 @@ fn match_tier(query: &str, entry: &DesktopEntry) -> Option<u32> {
     None
 }
 
-// ---- PID file toggle --------------------------------------------------------
-
-fn pid_file() -> PathBuf {
-    env::var("XDG_RUNTIME_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("/tmp"))
-        .join("breadbox.pid")
-}
-
-fn is_breadbox_pid(pid: u32) -> bool {
-    fs::read_to_string(format!("/proc/{}/comm", pid))
-        .map(|s| s.trim() == "breadbox")
-        .unwrap_or(false)
-}
-
-// Returns false if an existing instance was killed (caller should exit).
-fn toggle_or_continue() -> bool {
-    let pf = pid_file();
-    if let Ok(content) = fs::read_to_string(&pf) {
-        if let Ok(pid) = content.trim().parse::<u32>() {
-            if is_breadbox_pid(pid) {
-                let _ = Command::new("kill").arg(pid.to_string()).status();
-                return false;
-            }
-        }
-    }
-    let _ = fs::write(&pf, std::process::id().to_string());
-    true
-}
-
-fn cleanup_pid() {
-    let _ = fs::remove_file(pid_file());
-}
-
 // ---- UI ---------------------------------------------------------------------
 
 fn get_row_entry(row: &gtk4::ListBoxRow) -> Option<DesktopEntry> {
@@ -354,20 +299,11 @@ fn run_ui(entries: Vec<DesktopEntry>, history: LaunchHistory) {
         }
 
         // Full-screen transparent window; clicks outside the launcher panel close it.
-        let window = ApplicationWindow::builder().application(app).build();
-        window.init_layer_shell();
-        window.set_namespace(Some("breadbox"));
-        window.set_layer(Layer::Overlay);
-        window.set_keyboard_mode(KeyboardMode::Exclusive);
-        for edge in [Edge::Top, Edge::Bottom, Edge::Left, Edge::Right] {
-            window.set_anchor(edge, true);
-        }
-        window.set_exclusive_zone(0);
+        let window = bread_utils::gtk_popup::new_overlay_window(app, "breadbox");
 
         let close_all: Rc<dyn Fn()> = Rc::new({
             let w = window.clone();
             move || {
-                cleanup_pid();
                 w.close();
             }
         });
@@ -513,36 +449,11 @@ fn run_ui(entries: Vec<DesktopEntry>, history: LaunchHistory) {
                     glib::Propagation::Stop
                 }
                 Key::Down => {
-                    let cur = list_k.selected_row().map(|r| r.index()).unwrap_or(-1);
-                    let mut i = cur + 1;
-                    loop {
-                        match list_k.row_at_index(i) {
-                            Some(r) if r.is_visible() => {
-                                list_k.select_row(Some(&r));
-                                break;
-                            }
-                            Some(_) => i += 1,
-                            None => break,
-                        }
-                    }
+                    bread_utils::gtk_popup::select_next_visible(&list_k);
                     glib::Propagation::Stop
                 }
                 Key::Up => {
-                    let cur = list_k.selected_row().map(|r| r.index()).unwrap_or(0);
-                    let mut i = cur - 1;
-                    loop {
-                        if i < 0 {
-                            break;
-                        }
-                        match list_k.row_at_index(i) {
-                            Some(r) if r.is_visible() => {
-                                list_k.select_row(Some(&r));
-                                break;
-                            }
-                            Some(_) => i -= 1,
-                            None => break,
-                        }
-                    }
+                    bread_utils::gtk_popup::select_prev_visible(&list_k);
                     glib::Propagation::Stop
                 }
                 _ => glib::Propagation::Proceed,
@@ -564,23 +475,8 @@ fn run_ui(entries: Vec<DesktopEntry>, history: LaunchHistory) {
 
         // Click outside launcher panel → close
         let close_outside = Rc::clone(&close_all);
-        let vbox_ref = vbox.clone();
-        let win_ref = window.clone();
-        let outside_click = gtk4::GestureClick::new();
-        outside_click.connect_pressed(move |_, _, x, y| {
-            if let Some(b) = vbox_ref.compute_bounds(&win_ref) {
-                if x < b.x() as f64
-                    || x > (b.x() + b.width()) as f64
-                    || y < b.y() as f64
-                    || y > (b.y() + b.height()) as f64
-                {
-                    close_outside();
-                }
-            }
-        });
-        window.add_controller(outside_click);
+        bread_utils::gtk_popup::close_on_outside_click(&window, &vbox, move || close_outside());
 
-        window.connect_destroy(|_| cleanup_pid());
         window.present();
         search.grab_focus();
     });
@@ -591,12 +487,20 @@ fn run_ui(entries: Vec<DesktopEntry>, history: LaunchHistory) {
 // ---- Main -------------------------------------------------------------------
 
 fn main() {
-    if !toggle_or_continue() {
-        return;
-    }
+    // Kept alive for the rest of `main` — dropping it releases the
+    // single-instance lock and removes the pid file, which happens
+    // naturally once `run_ui` returns (after the window closes).
+    let _singleton_guard = match bread_utils::singleton::toggle_or_kill("breadbox") {
+        Ok(bread_utils::singleton::Toggle::Started(guard)) => Some(guard),
+        Ok(bread_utils::singleton::Toggle::KilledExisting) => return,
+        Err(e) => {
+            eprintln!("breadbox: single-instance lock unavailable ({e}); continuing without it");
+            None
+        }
+    };
 
     let config = Config::load();
-    let workspace = get_active_workspace().unwrap_or_default();
+    let workspace = bread_utils::hypr::active_workspace_name().unwrap_or_default();
     let priority = config
         .context_for(&workspace)
         .map(|c| c.priority.clone())

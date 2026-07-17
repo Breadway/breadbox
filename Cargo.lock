@@ -38,10 +38,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "bread-utils"
+version = "0.2.3"
+dependencies = [
+ "dirs",
+ "gtk4",
+ "gtk4-layer-shell",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "breadbox"
 version = "0.2.7"
 dependencies = [
  "bread-theme",
+ "bread-utils",
  "breadbox-shared",
  "gtk4",
  "gtk4-layer-shell",
