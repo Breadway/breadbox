@@ -1,6 +1,6 @@
 [Unit]
 Description=Breadbox icon sync
-Documentation=https://github.com/breadway/breadbox
+Documentation=https://git.breadway.dev/Breadway/breadbox
 After=network.target
 
 [Service]
