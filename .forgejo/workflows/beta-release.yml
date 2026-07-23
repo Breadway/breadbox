@@ -57,6 +57,7 @@ jobs:
           done
           cp src/packaging/breadbox-sync.service "${PKG_DIR}/"
           cp src/config.example.toml "${PKG_DIR}/"
+          cp src/LICENSE "${PKG_DIR}/"
           cp src/bakery.toml "${PKG_DIR}/bakery.toml"
           ln -sfn "${VERSION}" "/srv/breadway-dl/beta/breadbox/latest"
 
