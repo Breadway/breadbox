@@ -23,6 +23,8 @@ use gtk4::{
 };
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 
+mod screenshot;
+
 // ---- Hyprland IPC -----------------------------------------------------------
 
 fn get_active_workspace() -> Option<String> {
@@ -295,13 +297,24 @@ fn get_row_entry(row: &gtk4::ListBoxRow) -> Option<DesktopEntry> {
     }
 }
 
-fn run_ui(entries: Vec<DesktopEntry>, history: LaunchHistory) {
-    let app = Application::builder()
-        .application_id("com.breadway.breadbox")
-        .build();
+fn run_ui(
+    entries: Vec<DesktopEntry>,
+    history: LaunchHistory,
+    screenshot_req: Option<screenshot::ScreenshotRequest>,
+) {
+    let mut builder = Application::builder().application_id("com.breadway.breadbox");
+    if screenshot_req.is_some() {
+        // GApplication is single-instance by default; this machine typically
+        // already has a real breadbox instance, so without this a screenshot
+        // run would just message the *existing* instance instead of
+        // starting a fresh one that ever sees `screenshot_req`.
+        builder = builder.flags(gtk4::gio::ApplicationFlags::NON_UNIQUE);
+    }
+    let app = builder.build();
 
     let history_rc = Rc::new(RefCell::new(history));
     let query_rc: Rc<RefCell<String>> = Rc::new(RefCell::new(String::new()));
+    let is_screenshot_run = screenshot_req.is_some();
 
     app.connect_activate(move |app| {
         // Shared ecosystem base (fonts, palette, generic widgets) first, then
@@ -539,17 +552,38 @@ fn run_ui(entries: Vec<DesktopEntry>, history: LaunchHistory) {
         window.add_controller(outside_click);
 
         window.connect_destroy(|_| cleanup_pid());
+
+        if let Some(req) = screenshot_req.clone() {
+            screenshot::dispatch(&window, req);
+        }
+
         window.present();
         search.grab_focus();
     });
 
-    app.run();
+    if is_screenshot_run {
+        // GLib's own option parser otherwise rejects --screenshot/--output
+        // before clap ever sees them (`Cli::parse()` already ran in `main`,
+        // over the real argv).
+        app.run_with_args(&[] as &[&str]);
+    } else {
+        app.run();
+    }
 }
 
 // ---- Main -------------------------------------------------------------------
 
 fn main() {
-    if !toggle_or_continue() {
+    use clap::Parser;
+    let cli = screenshot::Cli::parse();
+    let screenshot_req = cli.screenshot_request();
+
+    // The PID-file toggle kills whatever's holding the file — a real,
+    // already-running breadbox instance included. A screenshot run must
+    // never touch it: it's a separate, disposable instance by design (same
+    // reasoning as breadbar's `allow_multiple_instances`), not a toggle of
+    // the operator's real launcher.
+    if screenshot_req.is_none() && !toggle_or_continue() {
         return;
     }
 
@@ -564,5 +598,5 @@ fn main() {
     let manifest = load_manifest();
     let entries = load_sorted_entries(&manifest, &priority, &history);
 
-    run_ui(entries, history);
+    run_ui(entries, history, screenshot_req);
 }
