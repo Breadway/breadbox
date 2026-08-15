@@ -254,40 +254,6 @@ fn fuzzy_score(query: &str, entry: &DesktopEntry) -> u32 {
     4 // subsequence match
 }
 
-// ---- PID file toggle --------------------------------------------------------
-
-fn pid_file() -> PathBuf {
-    env::var("XDG_RUNTIME_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("/tmp"))
-        .join("breadbox.pid")
-}
-
-fn is_breadbox_pid(pid: u32) -> bool {
-    fs::read_to_string(format!("/proc/{}/comm", pid))
-        .map(|s| s.trim() == "breadbox")
-        .unwrap_or(false)
-}
-
-// Returns false if an existing instance was killed (caller should exit).
-fn toggle_or_continue() -> bool {
-    let pf = pid_file();
-    if let Ok(content) = fs::read_to_string(&pf) {
-        if let Ok(pid) = content.trim().parse::<u32>() {
-            if is_breadbox_pid(pid) {
-                let _ = Command::new("kill").arg(pid.to_string()).status();
-                return false;
-            }
-        }
-    }
-    let _ = fs::write(&pf, std::process::id().to_string());
-    true
-}
-
-fn cleanup_pid() {
-    let _ = fs::remove_file(pid_file());
-}
-
 // ---- UI ---------------------------------------------------------------------
 
 fn get_row_entry(row: &gtk4::ListBoxRow) -> Option<DesktopEntry> {
@@ -344,7 +310,6 @@ fn run_ui(
         let close_all: Rc<dyn Fn()> = Rc::new({
             let w = window.clone();
             move || {
-                cleanup_pid();
                 w.close();
             }
         });
@@ -551,8 +516,6 @@ fn run_ui(
         });
         window.add_controller(outside_click);
 
-        window.connect_destroy(|_| cleanup_pid());
-
         if let Some(req) = screenshot_req.clone() {
             screenshot::dispatch(&window, req);
         }
@@ -578,14 +541,27 @@ fn main() {
     let cli = screenshot::Cli::parse();
     let screenshot_req = cli.screenshot_request();
 
-    // The PID-file toggle kills whatever's holding the file — a real,
-    // already-running breadbox instance included. A screenshot run must
+    // `toggle_or_kill` kills whatever's holding the single-instance lock —
+    // a real, already-running breadbox included. A screenshot run must
     // never touch it: it's a separate, disposable instance by design (same
     // reasoning as breadbar's `allow_multiple_instances`), not a toggle of
     // the operator's real launcher.
-    if screenshot_req.is_none() && !toggle_or_continue() {
-        return;
-    }
+    //
+    // Kept alive for the rest of `main` — dropping it releases the
+    // single-instance lock and removes the pid file, which happens
+    // naturally once `run_ui` returns (after the window closes).
+    let _singleton_guard = if screenshot_req.is_some() {
+        None
+    } else {
+        match bread_utils::singleton::toggle_or_kill("breadbox") {
+            Ok(bread_utils::singleton::Toggle::Started(guard)) => Some(guard),
+            Ok(bread_utils::singleton::Toggle::KilledExisting) => return,
+            Err(e) => {
+                eprintln!("breadbox: single-instance lock unavailable ({e}); continuing without it");
+                None
+            }
+        }
+    };
 
     let config = Config::load();
     let workspace = get_active_workspace().unwrap_or_default();

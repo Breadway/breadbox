@@ -9,9 +9,12 @@ name = "breadbox"
 path = "src/main.rs"
 
 [dependencies]
-bread-theme = { git = "https://github.com/Breadway/bread-ecosystem", tag = "v0.2.8", features = ["gtk"] }
+bread-theme = { git = "https://git.breadway.dev/Breadway/bread-ecosystem", tag = "v0.7.1", features = ["gtk"] }
+bread-utils = { git = "https://git.breadway.dev/Breadway/bread-ecosystem", tag = "v0.7.1" }
 # Capture primitives for `--screenshot` mode — see src/screenshot.rs.
-bread-screenshots = { git = "https://git.breadway.dev/Breadway/bread-ecosystem", branch = "main" }
+# Not on tag v0.7.1 (crate landed after that tag); rev-pin so this is not
+# `branch = "main"`.
+bread-screenshots = { git = "https://git.breadway.dev/Breadway/bread-ecosystem", rev = "69ce2d67a8de8a09c064aa9d7ff99b46656f0b1d" }
 breadbox-shared = { path = "../breadbox-shared" }
 gtk4 = { version = "0.11", features = ["v4_12"] }
 gtk4-layer-shell = "0.8"

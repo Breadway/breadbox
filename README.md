@@ -14,7 +14,7 @@ breadbox          GTK4 layer-shell launcher
 - Reads the active Hyprland workspace and sorts apps by context priority
 - Fuzzy filtering as you type; Enter launches, Escape closes
 - App icons loaded from the resolved icon cache (see `breadbox-sync`)
-- pywal palette auto-detected from `~/.cache/wal/colors.json`, falls back to Catppuccin Mocha
+- pywal accents from `~/.cache/wal/colors.json`; background/surface/overlay/foreground stay fixed BOS dark
 - User CSS override at `~/.config/breadbox/style.css`
 - Toggle/dismiss: running a second instance kills the first
 

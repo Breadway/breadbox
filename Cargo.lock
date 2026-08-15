@@ -85,17 +85,17 @@ checksum = "b4388bee8683e3d04af747c73422af53102d2bd24d9eadb6cbc100baef4b43f8"
 [[package]]
 name = "bread-screenshots"
 version = "0.3.1"
-source = "git+https://git.breadway.dev/Breadway/bread-ecosystem?branch=main#f86e299f4a0ea73ff485cd84923b986ddcc8242e"
+source = "git+https://git.breadway.dev/Breadway/bread-ecosystem?rev=69ce2d67a8de8a09c064aa9d7ff99b46656f0b1d#69ce2d67a8de8a09c064aa9d7ff99b46656f0b1d"
 dependencies = [
  "anyhow",
- "bread-utils",
+ "bread-utils 0.3.1 (git+https://git.breadway.dev/Breadway/bread-ecosystem?rev=69ce2d67a8de8a09c064aa9d7ff99b46656f0b1d)",
  "tracing",
 ]
 
 [[package]]
 name = "bread-theme"
-version = "0.2.3"
-source = "git+https://github.com/Breadway/bread-ecosystem?tag=v0.2.8#77417d552130281ff787e07d52541eb25e9d533b"
+version = "0.3.1"
+source = "git+https://git.breadway.dev/Breadway/bread-ecosystem?tag=v0.7.1#db2fa3c4b4c1e6933bc5cf62a236d05972fdc886"
 dependencies = [
  "dirs",
  "gtk4",
@@ -106,7 +106,17 @@ dependencies = [
 [[package]]
 name = "bread-utils"
 version = "0.3.1"
-source = "git+https://git.breadway.dev/Breadway/bread-ecosystem?branch=main#f86e299f4a0ea73ff485cd84923b986ddcc8242e"
+source = "git+https://git.breadway.dev/Breadway/bread-ecosystem?tag=v0.7.1#db2fa3c4b4c1e6933bc5cf62a236d05972fdc886"
+dependencies = [
+ "dirs",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "bread-utils"
+version = "0.3.1"
+source = "git+https://git.breadway.dev/Breadway/bread-ecosystem?rev=69ce2d67a8de8a09c064aa9d7ff99b46656f0b1d#69ce2d67a8de8a09c064aa9d7ff99b46656f0b1d"
 dependencies = [
  "dirs",
  "serde",
@@ -120,6 +130,7 @@ dependencies = [
  "anyhow",
  "bread-screenshots",
  "bread-theme",
+ "bread-utils 0.3.1 (git+https://git.breadway.dev/Breadway/bread-ecosystem?tag=v0.7.1)",
  "breadbox-shared",
  "clap",
  "gtk4",
@@ -480,7 +491,7 @@ dependencies = [
  "gobject-sys",
  "libc",
  "system-deps",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
