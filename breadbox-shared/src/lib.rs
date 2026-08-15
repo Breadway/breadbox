@@ -54,6 +54,9 @@ pub fn app_dirs() -> Vec<PathBuf> {
 
 #[derive(Debug, Clone)]
 pub struct DesktopEntry {
+    /// Desktop file id (the `.desktop` filename, e.g. `firefox.desktop`).
+    /// Empty only if the path had no file name; callers fall back to `exec`.
+    pub id: String,
     pub name: String,
     pub exec: String,
     pub icon_name: String,
@@ -155,7 +158,14 @@ pub fn parse_desktop(path: &Path) -> Option<DesktopEntry> {
         .map(|s| s.to_string())
         .collect();
 
+    let id = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_default();
+
     Some(DesktopEntry {
+        id,
         name,
         exec,
         icon_name,

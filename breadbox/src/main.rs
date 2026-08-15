@@ -1,4 +1,5 @@
 use bread_theme::{hex_to_rgba, ink_on, load_palette, Palette};
+use bread_utils::bread_client::BreadClient;
 use std::{
     cell::RefCell,
     collections::HashMap,
@@ -10,6 +11,10 @@ use std::{
     process::{Command, Stdio},
     rc::Rc,
 };
+
+/// This app's id in bread's sibling-app namespace registry
+/// (`bread_shared::apps::KNOWN_APPS`) — events publish as `bread.box.*`.
+const APP_ID: &str = "box";
 
 use breadbox_shared::{
     config_dir, load_all_desktop_entries, Config, DesktopEntry, IconCache, LaunchHistory,
@@ -206,22 +211,40 @@ fn pick_terminal() -> String {
 
 fn do_launch(entry: &DesktopEntry) {
     let cmd = entry.exec.trim();
-    if entry.terminal {
+    let spawned = if entry.terminal {
         let term = pick_terminal();
-        let _ = Command::new(&term)
+        Command::new(&term)
             .args(["-e", "bash", "-c", cmd])
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
-            .spawn();
+            .spawn()
     } else {
-        let _ = Command::new("bash")
+        Command::new("bash")
             .args(["-c", cmd])
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
-            .spawn();
+            .spawn()
+    };
+    if spawned.is_ok() {
+        emit_launched(entry);
     }
+}
+
+/// Publishes `bread.box.launched` after a successful spawn. Fire-and-forget
+/// and non-fatal (`BreadClient::emit` never blocks or errors this caller) —
+/// breadd being absent must never affect launching itself.
+fn emit_launched(entry: &DesktopEntry) {
+    let id = if entry.id.is_empty() {
+        entry.exec.as_str()
+    } else {
+        entry.id.as_str()
+    };
+    BreadClient::connect(APP_ID).emit(
+        "bread.box.launched",
+        serde_json::json!({ "id": id, "name": entry.name }),
+    );
 }
 
 // ---- Fuzzy matching ---------------------------------------------------------

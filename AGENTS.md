@@ -7,7 +7,7 @@ Follow [`CONTRIBUTING.md`](CONTRIBUTING.md). Single-trunk: `main` plus short-liv
 - `github` — mirror. Day-to-day push `origin` only.
 
 ## Product
-GTK4 app launcher + `breadbox-sync` icon cache. Theme via `bread-theme` (pin by tag on `git.breadway.dev`). Toggle uses `bread-utils::singleton`, not a homegrown PID file.
+GTK4 app launcher + `breadbox-sync` icon cache. Theme via `bread-theme` (pin by tag on `git.breadway.dev`). Toggle uses `bread-utils::singleton`, not a homegrown PID file. `EVENTS.md` is the bread-event contract (app id `box`); emit `bread.box.launched` after a successful launch. No command verbs.
 
 ## Distribution
 Bakery (`bakery.toml`). Forgejo `.forgejo/workflows/` is canonical; do not re-add a GitHub Actions release workflow.
