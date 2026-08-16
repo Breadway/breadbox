@@ -1,7 +1,7 @@
 use bread_theme::{hex_to_rgba, ink_on, load_palette, Palette};
 use bread_utils::bread_client::BreadClient;
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     collections::HashMap,
     env,
     fs,
@@ -10,6 +10,7 @@ use std::{
     path::{Path, PathBuf},
     process::{Command, Stdio},
     rc::Rc,
+    time::Duration,
 };
 
 /// This app's id in bread's sibling-app namespace registry
@@ -23,8 +24,8 @@ use gtk4::{
     glib,
     pango::EllipsizeMode,
     prelude::*,
-    Application, ApplicationWindow, Box as GBox, CssProvider, EventControllerKey, Label,
-    ListBox, Orientation, PolicyType, ScrolledWindow, SearchEntry, SelectionMode,
+    Application, ApplicationWindow, Box as GBox, CssProvider, Entry, EventControllerKey, Label,
+    ListBox, Orientation, PolicyType, ScrolledWindow, SelectionMode,
 };
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 
@@ -138,58 +139,171 @@ fn matches_term(field: &str, term: &str) -> bool {
 
 // ---- Theming ----------------------------------------------------------------
 
+const STAGGER_ROWS: usize = 12;
+
 fn build_css(p: &Palette) -> String {
-    let bg_panel = hex_to_rgba(&p.background, 0.60);
+    let bg_panel = hex_to_rgba(&p.background, 0.68);
     // breadbox-specific rules only — fonts, palette, and generic widgets come
     // from the shared ecosystem stylesheet (applied first in connect_activate).
-    // Colour is set on each surface (panel, search box, hovered/selected row) so
+    // Colour is set on each surface (panel, search, hovered/selected row) so
     // child labels inherit the legible ink for that background. `on_*` are
-    // luminance-picked black/white — the pywal hues are untouched. Without this a
-    // light `surface` slot makes the selected row's text vanish.
+    // luminance-picked black/white — the pywal hues are untouched.
+    //
+    // GTK4 ListBox's node is `list`, not `listbox`. These `list row:selected`
+    // rules beat the shared sheet's solid accent fill + on-accent ink so the
+    // glass card keeps a tinted selection and a left inset hairline.
+    let stagger = (0..STAGGER_ROWS)
+        .map(|i| {
+            format!(
+                ".launcher-bg.just-opened list row.stagger-{i} {{ animation-delay: {}ms; }}",
+                i * 28
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("");
     format!(
-        "window {{ background-color: transparent; }}\
-         .launcher-bg {{ background-color: {bg_panel}; color: {on_bg}; border-radius: 8px;\
-             box-shadow: 0 8px 32px rgba(0,0,0,0.6); }}\
-         searchentry {{ background-color: {surface}; color: {on_surface}; caret-color: {accent};\
-             border: none; outline: none; box-shadow: none;\
-             padding: 12px 16px; border-radius: 6px 6px 0 0; }}\
-         listbox {{ background-color: transparent; padding: 4px; }}\
-         row {{ padding: 8px 12px; color: {on_bg}; background-color: transparent;\
-             border-radius: 6px; }}\
-         row:hover {{ background-color: {surface}; color: {on_surface}; }}\
-         row:selected {{ background-color: {surface}; color: {on_surface}; }}\
-         .app-name {{ font-size: 14px; }}\
-         .app-muted {{ opacity: 0.6; font-size: 12px; }}\
-         image {{ margin-right: 8px; }}",
-        bg_panel   = bg_panel,
-        surface    = p.color0,
-        accent     = p.color4,
-        on_bg      = ink_on(&p.background),
-        on_surface = ink_on(&p.color0),
+        "\
+window {{ background-color: rgba(0, 0, 0, 0.28); animation: scrim-in 0.28s ease both; }}\
+@keyframes scrim-in {{\
+  from {{ background-color: rgba(0, 0, 0, 0); }}\
+  to {{ background-color: rgba(0, 0, 0, 0.28); }}\
+}}\
+.launcher-bg {{\
+  background-color: {bg_panel}; color: {on_bg}; border-radius: 20px;\
+  border: 1px solid alpha({on_bg}, 0.14);\
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.50);\
+  animation: card-in 0.42s cubic-bezier(0.22, 1, 0.36, 1) both;\
+}}\
+@keyframes card-in {{\
+  from {{ opacity: 0; margin-top: 112px; }}\
+  to {{ opacity: 1; margin-top: 88px; }}\
+}}\
+.launcher-bg entry {{\
+  background-color: transparent; color: {on_bg}; caret-color: {accent};\
+  border: none; outline: none; box-shadow: none;\
+  padding: 20px 22px 14px; border-radius: 20px 20px 0 0;\
+  font-size: 17px; min-height: 28px;\
+}}\
+.launcher-bg entry:focus, .launcher-bg entry:focus-within {{\
+  border: none; outline: none; box-shadow: none; background-color: transparent;\
+}}\
+entry > text {{ background: transparent; }}\
+entry image {{ opacity: 0; min-width: 0; margin: 0; padding: 0; }}\
+.launcher-caret {{\
+  min-height: 2px; max-height: 2px; margin: 0 20px; border-radius: 2px;\
+  background-color: {accent};\
+  background-image: linear-gradient(90deg, {accent}, {accent2});\
+}}\
+.launcher-bg.just-opened .launcher-caret {{\
+  animation: caret-draw 0.45s cubic-bezier(0.22, 1, 0.36, 1) both;\
+}}\
+@keyframes caret-draw {{\
+  from {{ margin-right: 600px; opacity: 0.25; }}\
+  to {{ margin-right: 20px; opacity: 1; }}\
+}}\
+scrolledwindow {{ background: transparent; }}\
+list {{ background-color: transparent; padding: 8px 8px 4px; }}\
+list row {{\
+  padding: 6px 8px; color: {on_bg}; background-color: transparent;\
+  border-radius: 14px; margin: 1px 10px; outline: none;\
+}}\
+list row:hover {{ background-color: alpha({on_bg}, 0.07); color: {on_bg}; }}\
+row:selected, list row:selected, list row:selected:focus,\
+list row:selected:hover, list row:selected:focus:hover {{\
+  background-color: alpha({accent}, 0.22); color: {on_bg};\
+  outline: none; box-shadow: none;\
+}}\
+list row:selected label, list row:selected .app-name, list row:selected .app-muted {{\
+  color: {on_bg};\
+}}\
+.app-row {{ min-height: 48px; }}\
+.app-icon-well {{\
+  min-width: 38px; min-height: 38px; margin-right: 12px;\
+  border-radius: 999px; background-color: alpha({on_bg}, 0.08);\
+}}\
+.app-icon {{ color: {on_bg}; opacity: 0.88; }}\
+.app-name {{ font-size: 14px; font-weight: bold; }}\
+.app-muted {{ opacity: 0.48; font-size: 11px; }}\
+.launcher-footer {{\
+  padding: 8px 18px 12px; font-size: 11px; opacity: 0.40;\
+  letter-spacing: 0.08em; text-transform: uppercase;\
+}}\
+.launcher-bg.just-opened list row {{\
+  animation: row-in 0.32s cubic-bezier(0.22, 1, 0.36, 1) both;\
+}}\
+@keyframes row-in {{\
+  from {{ opacity: 0; }}\
+  to {{ opacity: 1; }}\
+}}\
+{stagger}\
+list.reflow row {{ animation: row-fade 0.16s ease both; }}\
+@keyframes row-fade {{\
+  from {{ opacity: 0.40; }}\
+  to {{ opacity: 1; }}\
+}}\
+.no-motion, .no-motion * {{ animation: none; transition: none; }}",
+        bg_panel = bg_panel,
+        accent = p.color4,
+        accent2 = p.color5,
+        on_bg = ink_on(&p.background),
+        stagger = stagger,
     )
+}
+
+fn category_label(entry: &DesktopEntry) -> &'static str {
+    let has = |needle: &str| {
+        entry
+            .categories
+            .iter()
+            .any(|c| c.eq_ignore_ascii_case(needle) || c.to_ascii_lowercase().contains(needle))
+    };
+    if entry.terminal || has("terminalemulator") {
+        "Terminal"
+    } else if has("webbrowser") {
+        "Browser"
+    } else if has("game") {
+        "Games"
+    } else if has("instantmessaging") || has("chat") || has("ircclient") {
+        "Chat"
+    } else if has("settings") || has("desktopsettings") || has("system") {
+        "System"
+    } else if has("ide") || has("development") {
+        "IDE"
+    } else if has("office") || has("wordprocessor") || has("texteditor") || has("notes") {
+        "Notes"
+    } else if has("audio") || has("player") || has("audiovideo") {
+        "Music"
+    } else if has("graphics") || has("photography") || has("camera") {
+        "Capture"
+    } else if has("filemanager") {
+        "Files"
+    } else {
+        "App"
+    }
+}
+
+fn symbolic_icon(entry: &DesktopEntry) -> &'static str {
+    match category_label(entry) {
+        "Browser" => "web-browser-symbolic",
+        "Terminal" => "utilities-terminal-symbolic",
+        "Notes" => "accessories-text-editor-symbolic",
+        "System" => "emblem-system-symbolic",
+        "Chat" => "user-available-symbolic",
+        "Games" => "applications-games-symbolic",
+        "Music" => "audio-x-generic-symbolic",
+        "Capture" => "camera-photo-symbolic",
+        "IDE" => "applications-engineering-symbolic",
+        "Files" => "folder-symbolic",
+        _ => "application-x-executable-symbolic",
+    }
 }
 
 // ---- Icon loading -----------------------------------------------------------
 
-fn make_icon(icon_name: &str, icon_path: Option<&Path>) -> gtk4::Image {
-    // Try loading from resolved cached path via gio::File
-    if let Some(path) = icon_path {
-        let gio_file = gtk4::gio::File::for_path(path);
-        if let Ok(texture) = gtk4::gdk::Texture::from_file(&gio_file) {
-            let img = gtk4::Image::new();
-            img.set_paintable(Some(&texture));
-            img.set_pixel_size(32);
-            return img;
-        }
-    }
-    // Fall back to GTK icon theme lookup by name
-    let name = if icon_name.is_empty() {
-        "application-x-executable"
-    } else {
-        icon_name
-    };
-    let img = gtk4::Image::from_icon_name(name);
-    img.set_pixel_size(32);
+fn make_icon(entry: &DesktopEntry) -> gtk4::Image {
+    let img = gtk4::Image::from_icon_name(symbolic_icon(entry));
+    img.set_pixel_size(18);
+    img.add_css_class("app-icon");
     img
 }
 
@@ -287,6 +401,26 @@ fn get_row_entry(row: &gtk4::ListBoxRow) -> Option<DesktopEntry> {
     }
 }
 
+fn visible_row_count(list: &ListBox) -> u32 {
+    let mut n = 0;
+    let mut i = 0;
+    while let Some(row) = list.row_at_index(i) {
+        if row.is_visible() {
+            n += 1;
+        }
+        i += 1;
+    }
+    n
+}
+
+fn set_footer_count(footer: &Label, n: u32) {
+    match n {
+        0 => footer.set_text("no match"),
+        1 => footer.set_text("1 app"),
+        n => footer.set_text(&format!("{n} apps")),
+    }
+}
+
 fn run_ui(
     entries: Vec<DesktopEntry>,
     history: LaunchHistory,
@@ -330,6 +464,7 @@ fn run_ui(
             window.set_anchor(edge, true);
         }
         window.set_exclusive_zone(0);
+        bread_theme::gtk::bind_window_auto(&window);
 
         let close_all: Rc<dyn Fn()> = Rc::new({
             let w = window.clone();
@@ -342,12 +477,24 @@ fn run_ui(
         vbox.add_css_class("launcher-bg");
         vbox.set_halign(gtk4::Align::Center);
         vbox.set_valign(gtk4::Align::Start);
-        vbox.set_margin_top(120);
+        vbox.set_margin_top(88);
         vbox.set_size_request(600, -1);
+        if is_screenshot_run {
+            window.add_css_class("no-motion");
+            vbox.add_css_class("no-motion");
+        } else {
+            vbox.add_css_class("just-opened");
+        }
 
-        let search = SearchEntry::new();
-        search.set_placeholder_text(Some("breadbox"));
+        let search = Entry::new();
+        search.set_placeholder_text(Some("Search"));
+        search.set_has_frame(false);
         vbox.append(&search);
+
+        let caret = GBox::new(Orientation::Horizontal, 0);
+        caret.add_css_class("launcher-caret");
+        caret.set_hexpand(true);
+        vbox.append(&caret);
 
         let scroll = ScrolledWindow::new();
         scroll.set_policy(PolicyType::Never, PolicyType::Automatic);
@@ -359,28 +506,44 @@ fn run_ui(
 
         for (idx, entry) in entries.iter().enumerate() {
             let row = gtk4::ListBoxRow::new();
+            if idx < STAGGER_ROWS {
+                row.add_css_class(&format!("stagger-{idx}"));
+            }
             let hbox = GBox::new(Orientation::Horizontal, 0);
-            hbox.set_margin_start(6);
-            hbox.set_margin_end(6);
+            hbox.add_css_class("app-row");
             hbox.set_valign(gtk4::Align::Center);
 
-            let icon = make_icon(&entry.icon_name, entry.icon_path.as_deref());
-            hbox.append(&icon);
+            let well = GBox::new(Orientation::Horizontal, 0);
+            well.add_css_class("app-icon-well");
+            well.set_size_request(38, 38);
+            well.set_halign(gtk4::Align::Center);
+            well.set_valign(gtk4::Align::Center);
+            well.set_hexpand(false);
+            let icon = make_icon(entry);
+            icon.set_halign(gtk4::Align::Center);
+            icon.set_valign(gtk4::Align::Center);
+            icon.set_hexpand(true);
+            well.append(&icon);
+            hbox.append(&well);
+
+            let text = GBox::new(Orientation::Vertical, 1);
+            text.add_css_class("app-text");
+            text.set_hexpand(true);
+            text.set_valign(gtk4::Align::Center);
 
             let name_lbl = Label::new(Some(&entry.name));
             name_lbl.add_css_class("app-name");
             name_lbl.set_xalign(0.0);
-            name_lbl.set_hexpand(true);
             name_lbl.set_ellipsize(EllipsizeMode::End);
-            hbox.append(&name_lbl);
+            text.append(&name_lbl);
 
-            if let Some(ref wm) = entry.wm_class {
-                let wm_lbl = Label::new(Some(wm));
-                wm_lbl.add_css_class("app-muted");
-                wm_lbl.set_xalign(1.0);
-                hbox.append(&wm_lbl);
-            }
+            let sub_lbl = Label::new(Some(category_label(entry)));
+            sub_lbl.add_css_class("app-muted");
+            sub_lbl.set_xalign(0.0);
+            sub_lbl.set_ellipsize(EllipsizeMode::End);
+            text.append(&sub_lbl);
 
+            hbox.append(&text);
             row.set_child(Some(&hbox));
             unsafe { row.set_data("entry", entry.clone()) };
             unsafe { row.set_data("initial_order", idx as u32) };
@@ -418,11 +581,29 @@ fn run_ui(
 
         scroll.set_child(Some(&list));
         vbox.append(&scroll);
+
+        let footer = Label::new(None);
+        footer.add_css_class("launcher-footer");
+        footer.set_xalign(0.0);
+        set_footer_count(&footer, visible_row_count(&list));
+        vbox.append(&footer);
+
         window.set_child(Some(&vbox));
 
-        // Filter on keystroke
+        if !is_screenshot_run {
+            let vbox_open = vbox.clone();
+            glib::timeout_add_local_once(Duration::from_millis(520), move || {
+                vbox_open.remove_css_class("just-opened");
+            });
+        }
+
+        // Filter on keystroke. ListBox keeps row identity across sort, so the
+        // reorder is already a cheap FLIP analog; a short CSS fade is the extra.
         let list_f = list.clone();
+        let footer_f = footer.clone();
+        let vbox_f = vbox.clone();
         let filter_query = Rc::clone(&query_rc);
+        let reflow_gen = Rc::new(Cell::new(0u32));
         search.connect_changed(move |entry| {
             let text = entry.text();
             let query = text.as_str();
@@ -432,6 +613,7 @@ fn run_ui(
                 let vis = get_row_entry(&row)
                     .map(|e| {
                         fuzzy_matches(query, &e.name)
+                            || fuzzy_matches(query, category_label(&e))
                             || e.wm_class
                                 .as_deref()
                                 .is_some_and(|w| fuzzy_matches(query, w))
@@ -446,6 +628,20 @@ fn run_ui(
                 list_f.row_at_index(j).filter(|r| r.is_visible())
             });
             list_f.select_row(first_vis.as_ref());
+            set_footer_count(&footer_f, visible_row_count(&list_f));
+            if !vbox_f.has_css_class("just-opened") {
+                list_f.remove_css_class("reflow");
+                list_f.add_css_class("reflow");
+                let gen = reflow_gen.get().wrapping_add(1);
+                reflow_gen.set(gen);
+                let list_fade = list_f.clone();
+                let reflow_gen = Rc::clone(&reflow_gen);
+                glib::timeout_add_local_once(Duration::from_millis(180), move || {
+                    if reflow_gen.get() == gen {
+                        list_fade.remove_css_class("reflow");
+                    }
+                });
+            }
         });
 
         // Keyboard handling — capture phase on window
