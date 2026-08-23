@@ -3,8 +3,7 @@ use bread_utils::bread_client::BreadClient;
 use std::{
     cell::{Cell, RefCell},
     collections::HashMap,
-    env,
-    fs,
+    env, fs,
     io::{Read, Write},
     os::unix::net::UnixStream,
     path::{Path, PathBuf},
@@ -21,13 +20,9 @@ use breadbox_shared::{
     config_dir, load_all_desktop_entries, Config, DesktopEntry, IconCache, LaunchHistory,
 };
 use gtk4::{
-    glib,
-    pango::EllipsizeMode,
-    prelude::*,
-    Application, ApplicationWindow, Box as GBox, CssProvider, Entry, EventControllerKey, Label,
-    ListBox, Orientation, PolicyType, ScrolledWindow, SelectionMode,
+    glib, pango::EllipsizeMode, prelude::*, Application, Box as GBox, CssProvider, Entry,
+    EventControllerKey, Label, ListBox, Orientation, PolicyType, ScrolledWindow, SelectionMode,
 };
-use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
 
 mod listen;
 mod screenshot;
@@ -91,7 +86,9 @@ fn load_sorted_entries(
             (None, Some(_)) => std::cmp::Ordering::Greater,
             (None, None) => {
                 // Most-launched first, then alphabetical
-                history.count(&b.name).cmp(&history.count(&a.name))
+                history
+                    .count(&b.name)
+                    .cmp(&history.count(&a.name))
                     .then(a.name.to_lowercase().cmp(&b.name.to_lowercase()))
             }
         }
@@ -385,10 +382,18 @@ fn fuzzy_score(query: &str, entry: &DesktopEntry) -> u32 {
     let q = query.to_lowercase();
     let name = entry.name.to_lowercase();
     let wm = entry.wm_class.as_deref().unwrap_or("").to_lowercase();
-    if name == q || wm == q { return 0; }
-    if name.starts_with(&q) { return 1; }
-    if name.contains(&q) { return 2; }
-    if wm.starts_with(&q) || wm.contains(&q) { return 3; }
+    if name == q || wm == q {
+        return 0;
+    }
+    if name.starts_with(&q) {
+        return 1;
+    }
+    if name.contains(&q) {
+        return 2;
+    }
+    if wm.starts_with(&q) || wm.contains(&q) {
+        return 3;
+    }
     4 // subsequence match
 }
 
@@ -454,16 +459,8 @@ fn run_ui(
             bread_theme::gtk::apply_user_css(&user_css_path, &user_cell);
         }
 
-        // Full-screen transparent window; clicks outside the launcher panel close it.
-        let window = ApplicationWindow::builder().application(app).build();
-        window.init_layer_shell();
-        window.set_namespace(Some("breadbox"));
-        window.set_layer(Layer::Overlay);
-        window.set_keyboard_mode(KeyboardMode::Exclusive);
-        for edge in [Edge::Top, Edge::Bottom, Edge::Left, Edge::Right] {
-            window.set_anchor(edge, true);
-        }
-        window.set_exclusive_zone(0);
+        // Full-screen transparent overlay; panel widget is positioned inside it.
+        let window = bread_utils::gtk_popup::new_overlay_window(app, "breadbox");
         bread_theme::gtk::bind_window_auto(&window);
 
         let close_all: Rc<dyn Fn()> = Rc::new({
@@ -557,8 +554,16 @@ fn run_ui(
         list.set_sort_func(move |row_a, row_b| {
             let query = sort_query.borrow();
             if query.is_empty() {
-                let oa = unsafe { row_a.data::<u32>("initial_order").map_or(u32::MAX, |p| *p.as_ref()) };
-                let ob = unsafe { row_b.data::<u32>("initial_order").map_or(u32::MAX, |p| *p.as_ref()) };
+                let oa = unsafe {
+                    row_a
+                        .data::<u32>("initial_order")
+                        .map_or(u32::MAX, |p| *p.as_ref())
+                };
+                let ob = unsafe {
+                    row_b
+                        .data::<u32>("initial_order")
+                        .map_or(u32::MAX, |p| *p.as_ref())
+                };
                 return oa.cmp(&ob).into();
             }
             let (Some(ea), Some(eb)) = (get_row_entry(row_a), get_row_entry(row_b)) else {
@@ -624,9 +629,8 @@ fn run_ui(
                 i += 1;
             }
             list_f.invalidate_sort();
-            let first_vis = (0i32..).find_map(|j| {
-                list_f.row_at_index(j).filter(|r| r.is_visible())
-            });
+            let first_vis =
+                (0i32..).find_map(|j| list_f.row_at_index(j).filter(|r| r.is_visible()));
             list_f.select_row(first_vis.as_ref());
             set_footer_count(&footer_f, visible_row_count(&list_f));
             if !vbox_f.has_css_class("just-opened") {
@@ -669,36 +673,11 @@ fn run_ui(
                     glib::Propagation::Stop
                 }
                 Key::Down => {
-                    let cur = list_k.selected_row().map(|r| r.index()).unwrap_or(-1);
-                    let mut i = cur + 1;
-                    loop {
-                        match list_k.row_at_index(i) {
-                            Some(r) if r.is_visible() => {
-                                list_k.select_row(Some(&r));
-                                break;
-                            }
-                            Some(_) => i += 1,
-                            None => break,
-                        }
-                    }
+                    bread_utils::gtk_popup::select_next_visible(&list_k);
                     glib::Propagation::Stop
                 }
                 Key::Up => {
-                    let cur = list_k.selected_row().map(|r| r.index()).unwrap_or(0);
-                    let mut i = cur - 1;
-                    loop {
-                        if i < 0 {
-                            break;
-                        }
-                        match list_k.row_at_index(i) {
-                            Some(r) if r.is_visible() => {
-                                list_k.select_row(Some(&r));
-                                break;
-                            }
-                            Some(_) => i -= 1,
-                            None => break,
-                        }
-                    }
+                    bread_utils::gtk_popup::select_prev_visible(&list_k);
                     glib::Propagation::Stop
                 }
                 _ => glib::Propagation::Proceed,
@@ -719,22 +698,10 @@ fn run_ui(
         });
 
         // Click outside launcher panel → close
-        let close_outside = Rc::clone(&close_all);
-        let vbox_ref = vbox.clone();
-        let win_ref = window.clone();
-        let outside_click = gtk4::GestureClick::new();
-        outside_click.connect_pressed(move |_, _, x, y| {
-            if let Some(b) = vbox_ref.compute_bounds(&win_ref) {
-                if x < b.x() as f64
-                    || x > (b.x() + b.width()) as f64
-                    || y < b.y() as f64
-                    || y > (b.y() + b.height()) as f64
-                {
-                    close_outside();
-                }
-            }
-        });
-        window.add_controller(outside_click);
+        {
+            let close_outside = Rc::clone(&close_all);
+            bread_utils::gtk_popup::close_on_outside_click(&window, &vbox, move || close_outside());
+        }
 
         if let Some(req) = screenshot_req.clone() {
             screenshot::dispatch(&window, req);
@@ -782,7 +749,9 @@ fn main() {
             Ok(bread_utils::singleton::Toggle::Started(guard)) => Some(guard),
             Ok(bread_utils::singleton::Toggle::KilledExisting) => return,
             Err(e) => {
-                eprintln!("breadbox: single-instance lock unavailable ({e}); continuing without it");
+                eprintln!(
+                    "breadbox: single-instance lock unavailable ({e}); continuing without it"
+                );
                 None
             }
         }
