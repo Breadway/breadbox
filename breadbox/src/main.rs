@@ -1,31 +1,37 @@
+use bread_launcher::gtk::{row_entry, ResultsList};
 use bread_theme::{hex_to_rgba, ink_on, load_palette, Palette};
-use bread_utils::bread_client::BreadClient;
 use std::{
-    cell::{Cell, RefCell},
+    cell::RefCell,
     collections::HashMap,
     env, fs,
     io::{Read, Write},
     os::unix::net::UnixStream,
-    path::{Path, PathBuf},
-    process::{Command, Stdio},
+    path::PathBuf,
     rc::Rc,
-    time::Duration,
 };
 
 /// This app's id in bread's sibling-app namespace registry
 /// (`bread_shared::apps::KNOWN_APPS`) — events publish as `bread.box.*`.
 const APP_ID: &str = "box";
 
-use breadbox_shared::{
-    config_dir, load_all_desktop_entries, Config, DesktopEntry, IconCache, LaunchHistory,
-};
+/// Emitted instead of mapping breadbox's own window when the active shell
+/// theme's launcher is embedded (theme 04's capsule). Must stay inside
+/// `bread.box.*` — see [`dispatch_embedded_open`] for why.
+pub const EMBEDDED_OPEN_EVENT: &str = "bread.box.open_requested";
+
+/// Published via `bread_launcher::do_launch` after a successful launch —
+/// see `EVENTS.md`.
+const LAUNCHED_EVENT: &str = "bread.box.launched";
+
+use breadbox_shared::{config_dir, Config, DesktopEntry, LaunchHistory};
 use gtk4::{
-    glib, pango::EllipsizeMode, prelude::*, Application, Box as GBox, CssProvider, Entry,
-    EventControllerKey, Label, ListBox, Orientation, PolicyType, ScrolledWindow, SelectionMode,
+    glib, prelude::*, Application, Box as GBox, CssProvider,
+    EventControllerKey, Label, Orientation, SearchEntry,
 };
 
 mod listen;
 mod screenshot;
+mod theme;
 
 // ---- Hyprland IPC -----------------------------------------------------------
 
@@ -48,7 +54,7 @@ fn get_active_workspace() -> Option<String> {
 // ---- Manifest ---------------------------------------------------------------
 
 fn load_manifest() -> HashMap<String, PathBuf> {
-    let path = IconCache::manifest_path();
+    let path = breadbox_shared::icon_manifest_path();
     let content = fs::read_to_string(&path).unwrap_or_default();
     serde_json::from_str::<HashMap<String, String>>(&content)
         .unwrap_or_default()
@@ -57,360 +63,145 @@ fn load_manifest() -> HashMap<String, PathBuf> {
         .collect()
 }
 
-// ---- Entry loading and sorting ----------------------------------------------
-
-fn load_sorted_entries(
-    manifest: &HashMap<String, PathBuf>,
-    priority: &[String],
-    history: &LaunchHistory,
-) -> Vec<DesktopEntry> {
-    let mut entries = load_all_desktop_entries();
-
-    // Populate icon_path from manifest
-    for entry in &mut entries {
-        if let Some(path) = manifest.get(&entry.icon_name) {
-            if path.exists() {
-                entry.icon_path = Some(path.clone());
-            }
-        }
-    }
-
-    let priority_lower: Vec<String> = priority.iter().map(|s| s.to_lowercase()).collect();
-
-    entries.sort_by(|a, b| {
-        let ai = priority_rank(a, &priority_lower);
-        let bi = priority_rank(b, &priority_lower);
-        match (ai, bi) {
-            (Some(i), Some(j)) => i.cmp(&j),
-            (Some(_), None) => std::cmp::Ordering::Less,
-            (None, Some(_)) => std::cmp::Ordering::Greater,
-            (None, None) => {
-                // Most-launched first, then alphabetical
-                history
-                    .count(&b.name)
-                    .cmp(&history.count(&a.name))
-                    .then(a.name.to_lowercase().cmp(&b.name.to_lowercase()))
-            }
-        }
-    });
-
-    entries
-}
-
-fn priority_rank(entry: &DesktopEntry, priority_lower: &[String]) -> Option<usize> {
-    let name_l = entry.name.to_lowercase();
-    let wm_l = entry.wm_class.as_deref().unwrap_or("").to_lowercase();
-    priority_lower
-        .iter()
-        .position(|p| matches_term(&name_l, p) || matches_term(&wm_l, p))
-}
-
-/// Whole-word / exact match of `term` within `field` (both lowercase). Avoids
-/// "code" matching "vscodium" while still matching "Code", "code-oss", and
-/// "Visual Studio Code".
-fn matches_term(field: &str, term: &str) -> bool {
-    if term.is_empty() || field.is_empty() {
-        return false;
-    }
-    if field == term {
-        return true;
-    }
-    let bytes = field.as_bytes();
-    let tlen = term.len();
-    let mut start = 0;
-    while let Some(pos) = field[start..].find(term) {
-        let i = start + pos;
-        let before_ok = i == 0 || !bytes[i - 1].is_ascii_alphanumeric();
-        let after = i + tlen;
-        let after_ok = after >= bytes.len() || !bytes[after].is_ascii_alphanumeric();
-        if before_ok && after_ok {
-            return true;
-        }
-        start = i + 1;
-        if start >= field.len() {
-            break;
-        }
-    }
-    false
-}
-
 // ---- Theming ----------------------------------------------------------------
 
-const STAGGER_ROWS: usize = 12;
-
-fn build_css(p: &Palette) -> String {
-    let bg_panel = hex_to_rgba(&p.background, 0.68);
-    // breadbox-specific rules only — fonts, palette, and generic widgets come
-    // from the shared ecosystem stylesheet (applied first in connect_activate).
-    // Colour is set on each surface (panel, search, hovered/selected row) so
-    // child labels inherit the legible ink for that background. `on_*` are
-    // luminance-picked black/white — the pywal hues are untouched.
+fn build_css(
+    p: &Palette,
+    launcher: &bread_theme::shell::Launcher,
+    tokens: &bread_theme::shell::Tokens,
+) -> String {
+    // Panel opacity comes from the theme, not a hardcoded constant. 0.60 made
+    // the launcher wash out over a bright wallpaper and its text hard to read —
+    // a bar can be that translucent because it covers a thin strip, a full
+    // panel cannot. The approved reference uses 0.95/0.93 per theme.
+    let bg_panel = hex_to_rgba(&p.background, launcher.panel_alpha as f32);
+    let radius = format!("{}px", launcher.radius);
+    let on_bg = ink_on(&p.background);
+    // breadbox-specific rules only — the generic widget baseline (buttons,
+    // switches, plain `entry`/`spinbutton`) comes from the shared ecosystem
+    // stylesheet, applied first (lower priority) in connect_activate via
+    // `apply_shared`. Colour is set on each surface (panel, search box,
+    // hovered/selected row) so child labels inherit the legible ink for that
+    // background. `on_*` are luminance-picked black/white — the pywal hues
+    // are untouched. Without this a light `surface` slot makes the selected
+    // row's text vanish.
     //
-    // GTK4 ListBox's node is `list`, not `listbox`. These `list row:selected`
-    // rules beat the shared sheet's solid accent fill + on-accent ink so the
-    // glass card keeps a tinted selection and a left inset hairline.
-    let stagger = (0..STAGGER_ROWS)
-        .map(|i| {
-            format!(
-                ".launcher-bg.just-opened list row.stagger-{i} {{ animation-delay: {}ms; }}",
-                i * 28
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("");
+    // Selectors matter here: GTK4's `GtkSearchEntry` CSS node is `entry`
+    // carrying a `.search` style class (confirmed against
+    // `/usr/share/gir-1.0/Gtk-4.0.gir`'s `SearchEntry` "## CSS Nodes" doc,
+    // `entry.search ╰── text`) — NOT a node literally named `searchentry`,
+    // and `GtkListBox`'s node is `list`, NOT `listbox`. Both bogus selectors
+    // shipped here previously and silently matched nothing, which is why
+    // this rule block's `border`/`outline` suppression never actually beat
+    // the shared stylesheet's `entry:focus-within { border-color: @accent }`
+    // rule (`bread_theme::stylesheet`, still layered in underneath at
+    // APPLICATION priority) — the accent-coloured focus "outline" the user
+    // was seeing was that shared rule showing through unopposed. `entry`
+    // alone (no `.search`) would work too since this window has only one
+    // entry, but `.search` documents which GtkSearchEntry state this targets
+    // and is what actually renders.
+    //
+    // Per-theme geometry now comes entirely from `[launcher]`/`[tokens]` —
+    // liquid-motion and glass-workbench set every one of these to different
+    // values (see their `assets/shell/*/theme.toml`), which is what makes
+    // the two themes read as different instruments rather than one
+    // launcher recoloured.
     format!(
-        "\
-window {{ background-color: rgba(0, 0, 0, 0.28); animation: scrim-in 0.28s ease both; }}\
-@keyframes scrim-in {{\
-  from {{ background-color: rgba(0, 0, 0, 0); }}\
-  to {{ background-color: rgba(0, 0, 0, 0.28); }}\
-}}\
-.launcher-bg {{\
-  background-color: {bg_panel}; color: {on_bg}; border-radius: 20px;\
-  border: 1px solid alpha({on_bg}, 0.14);\
-  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.50);\
-  animation: card-in 0.42s cubic-bezier(0.22, 1, 0.36, 1) both;\
-}}\
-@keyframes card-in {{\
-  from {{ opacity: 0; margin-top: 112px; }}\
-  to {{ opacity: 1; margin-top: 88px; }}\
-}}\
-.launcher-bg entry {{\
-  background-color: transparent; color: {on_bg}; caret-color: {accent};\
-  border: none; outline: none; box-shadow: none;\
-  padding: 20px 22px 14px; border-radius: 20px 20px 0 0;\
-  font-size: 17px; min-height: 28px;\
-}}\
-.launcher-bg entry:focus, .launcher-bg entry:focus-within {{\
-  border: none; outline: none; box-shadow: none; background-color: transparent;\
-}}\
-entry > text {{ background: transparent; }}\
-entry image {{ opacity: 0; min-width: 0; margin: 0; padding: 0; }}\
-.launcher-caret {{\
-  min-height: 2px; max-height: 2px; margin: 0 20px; border-radius: 2px;\
-  background-color: {accent};\
-  background-image: linear-gradient(90deg, {accent}, {accent2});\
-}}\
-.launcher-bg.just-opened .launcher-caret {{\
-  animation: caret-draw 0.45s cubic-bezier(0.22, 1, 0.36, 1) both;\
-}}\
-@keyframes caret-draw {{\
-  from {{ margin-right: 600px; opacity: 0.25; }}\
-  to {{ margin-right: 20px; opacity: 1; }}\
-}}\
-scrolledwindow {{ background: transparent; }}\
-list {{ background-color: transparent; padding: 8px 8px 4px; }}\
-list row {{\
-  padding: 6px 8px; color: {on_bg}; background-color: transparent;\
-  border-radius: 14px; margin: 1px 10px; outline: none;\
-}}\
-list row:hover {{ background-color: alpha({on_bg}, 0.07); color: {on_bg}; }}\
-row:selected, list row:selected, list row:selected:focus,\
-list row:selected:hover, list row:selected:focus:hover {{\
-  background-color: alpha({accent}, 0.22); color: {on_bg};\
-  outline: none; box-shadow: none;\
-}}\
-list row:selected label, list row:selected .app-name, list row:selected .app-muted {{\
-  color: {on_bg};\
-}}\
-.app-row {{ min-height: 48px; }}\
-.app-icon-well {{\
-  min-width: 38px; min-height: 38px; margin-right: 12px;\
-  border-radius: 999px; background-color: alpha({on_bg}, 0.08);\
-}}\
-.app-icon {{ color: {on_bg}; opacity: 0.88; }}\
-.app-name {{ font-size: 14px; font-weight: bold; }}\
-.app-muted {{ opacity: 0.48; font-size: 11px; }}\
-.launcher-footer {{\
-  padding: 8px 18px 12px; font-size: 11px; opacity: 0.40;\
-  letter-spacing: 0.08em; text-transform: uppercase;\
-}}\
-.launcher-bg.just-opened list row {{\
-  animation: row-in 0.32s cubic-bezier(0.22, 1, 0.36, 1) both;\
-}}\
-@keyframes row-in {{\
-  from {{ opacity: 0; }}\
-  to {{ opacity: 1; }}\
-}}\
-{stagger}\
-list.reflow row {{ animation: row-fade 0.16s ease both; }}\
-@keyframes row-fade {{\
-  from {{ opacity: 0.40; }}\
-  to {{ opacity: 1; }}\
-}}\
-.no-motion, .no-motion * {{ animation: none; transition: none; }}",
-        bg_panel = bg_panel,
-        accent = p.color4,
-        accent2 = p.color5,
-        on_bg = ink_on(&p.background),
-        stagger = stagger,
+        "window {{ background-color: transparent; }}\
+         .launcher-bg {{ background-color: {bg_panel}; color: {on_bg}; border-radius: {radius};\
+             /* NO drop shadow. In a browser `backdrop-filter` blurs only the\
+                element's own box, so the demo's shadow is free. Hyprland\
+                blurs any surface pixel above `ignore_alpha` (0.2), and a\
+                32px shadow at 0.6 alpha is far above it — so the compositor\
+                blurred the shadow as well, painting a rectangular blurred\
+                halo around the rounded panel. That halo is the \"blur\
+                backdrop whose radius doesn't match the content\" problem.\
+                The blur behind a 0.95-opaque panel already gives plenty of\
+                separation; the shadow only fought it. */\
+             font-family: \"{font_family}\", {font_fallback}; }}\
+         entry.search {{ background-color: transparent; color: {on_bg}; caret-color: {accent};\
+             border: none; outline: none; box-shadow: none; border-radius: 0;\
+             border-bottom: 1px solid {hairline};\
+             padding: {search_pv}px {search_ph}px; font-size: {search_fs}px; }}\
+         entry.search:focus, entry.search:focus-within {{\
+             outline: none; box-shadow: none; border-color: transparent;\
+             border-bottom: 1px solid {hairline}; }}\
+         list {{ background-color: transparent; padding: 4px 0; }}\
+         row {{ padding: {row_pv}px {row_ph}px; margin: 0 {row_inset}px; color: {on_bg};\
+             background-color: transparent; border-radius: {row_radius}px;\
+             font-size: {row_fs}px; }}\
+         row:hover, row:selected {{ background-color: {selection_bg}; color: {on_bg}; }}\
+         .app-muted {{ opacity: 0.4; font-size: 11px; }}\
+         /* No background tile: these are real app icons, not the demo's\
+            placeholder .ico boxes. A tint behind a real icon reads as a\
+            failed/unloaded image. */\
+         image {{ margin-right: 8px; border-radius: {icon_radius}px; }}\
+         /* \"Recent\"/\"Apps\" headers (`[launcher].sections`, liquid-motion\
+            only — glass-workbench's flat list never builds these rows). */\
+         .section-header-label {{ font-size: 10px; letter-spacing: 0.14em;\
+             text-transform: uppercase; font-weight: 600; opacity: 0.45; }}\
+         .bread-drawer-section-header {{ padding: 11px 16px 5px; }}\
+         .launcher-footer {{ padding: 8px 16px 12px; font-size: 10px; opacity: 0.4;\
+             {footer_case} }}",
+        bg_panel      = bg_panel,
+        accent        = hex_to_rgba(&p.color4, 0.9),
+        on_bg         = on_bg,
+        hairline      = hex_to_rgba(on_bg, 0.08),
+        selection_bg  = hex_to_rgba(&p.color4, launcher.selection_alpha as f32),
+        radius        = radius,
+        font_family   = tokens.font_family(),
+        font_fallback = tokens.font_fallback(),
+        row_fs        = tokens.font_size_base(),
+        row_pv        = launcher.row_padding_v,
+        row_ph        = launcher.row_padding_h,
+        row_inset     = launcher.row_inset,
+        row_radius    = launcher.row_radius,
+        icon_radius   = launcher.icon_radius,
+        search_pv     = launcher.search_padding_v,
+        search_ph     = launcher.search_padding_h,
+        search_fs     = launcher.search_font_size,
+        // Section headers and an uppercase, letter-spaced footer travel
+        // together in both demos (liquid-motion has both; glass-workbench's
+        // flat list has neither) — reusing `sections` here instead of a
+        // dedicated schema key for this one footer detail.
+        footer_case   = if launcher.sections {
+            "text-transform: uppercase; letter-spacing: 0.12em;"
+        } else {
+            ""
+        },
     )
 }
 
-fn category_label(entry: &DesktopEntry) -> &'static str {
-    let has = |needle: &str| {
-        entry
-            .categories
-            .iter()
-            .any(|c| c.eq_ignore_ascii_case(needle) || c.to_ascii_lowercase().contains(needle))
-    };
-    if entry.terminal || has("terminalemulator") {
-        "Terminal"
-    } else if has("webbrowser") {
-        "Browser"
-    } else if has("game") {
-        "Games"
-    } else if has("instantmessaging") || has("chat") || has("ircclient") {
-        "Chat"
-    } else if has("settings") || has("desktopsettings") || has("system") {
-        "System"
-    } else if has("ide") || has("development") {
-        "IDE"
-    } else if has("office") || has("wordprocessor") || has("texteditor") || has("notes") {
-        "Notes"
-    } else if has("audio") || has("player") || has("audiovideo") {
-        "Music"
-    } else if has("graphics") || has("photography") || has("camera") {
-        "Capture"
-    } else if has("filemanager") {
-        "Files"
+/// `[launcher].footer`'s noun: `"count_apps"` → "applications", anything
+/// else (`"count_results"` included — every other current/future value
+/// falls back to this rather than a hard error, matching the "never fails
+/// to start over a theme string" rule the rest of this schema follows) →
+/// "results". `n`'s plural/singular form is picked here rather than baked
+/// into `[launcher].footer` itself, since neither built-in theme's value is
+/// singular-aware.
+fn footer_text(footer_kind: &str, n: usize) -> String {
+    let noun = if footer_kind == "count_apps" {
+        "application"
     } else {
-        "App"
-    }
-}
-
-fn symbolic_icon(entry: &DesktopEntry) -> &'static str {
-    match category_label(entry) {
-        "Browser" => "web-browser-symbolic",
-        "Terminal" => "utilities-terminal-symbolic",
-        "Notes" => "accessories-text-editor-symbolic",
-        "System" => "emblem-system-symbolic",
-        "Chat" => "user-available-symbolic",
-        "Games" => "applications-games-symbolic",
-        "Music" => "audio-x-generic-symbolic",
-        "Capture" => "camera-photo-symbolic",
-        "IDE" => "applications-engineering-symbolic",
-        "Files" => "folder-symbolic",
-        _ => "application-x-executable-symbolic",
-    }
-}
-
-// ---- Icon loading -----------------------------------------------------------
-
-fn make_icon(entry: &DesktopEntry) -> gtk4::Image {
-    let img = gtk4::Image::from_icon_name(symbolic_icon(entry));
-    img.set_pixel_size(18);
-    img.add_css_class("app-icon");
-    img
-}
-
-// ---- Launch -----------------------------------------------------------------
-
-fn pick_terminal() -> String {
-    if let Ok(t) = env::var("TERMINAL") {
-        if !t.is_empty() {
-            return t;
-        }
-    }
-    let path_var = env::var("PATH").unwrap_or_default();
-    for t in ["foot", "kitty", "alacritty", "wezterm", "ghostty", "xterm"] {
-        if path_var.split(':').any(|d| Path::new(d).join(t).exists()) {
-            return t.to_string();
-        }
-    }
-    "xterm".to_string()
-}
-
-fn do_launch(entry: &DesktopEntry) {
-    let cmd = entry.exec.trim();
-    let spawned = if entry.terminal {
-        let term = pick_terminal();
-        Command::new(&term)
-            .args(["-e", "bash", "-c", cmd])
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-    } else {
-        Command::new("bash")
-            .args(["-c", cmd])
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
+        "result"
     };
-    if spawned.is_ok() {
-        emit_launched(entry);
-    }
-}
-
-/// Publishes `bread.box.launched` after a successful spawn. Fire-and-forget
-/// and non-fatal (`BreadClient::emit` never blocks or errors this caller) —
-/// breadd being absent must never affect launching itself.
-fn emit_launched(entry: &DesktopEntry) {
-    let id = if entry.id.is_empty() {
-        entry.exec.as_str()
+    if n == 1 {
+        format!("1 {noun}")
     } else {
-        entry.id.as_str()
-    };
-    BreadClient::connect(APP_ID).emit(
-        "bread.box.launched",
-        serde_json::json!({ "id": id, "name": entry.name }),
-    );
-}
-
-// ---- Fuzzy matching ---------------------------------------------------------
-
-fn fuzzy_matches(pattern: &str, text: &str) -> bool {
-    if pattern.is_empty() {
-        return true;
-    }
-    let mut chars = text.chars();
-    for pc in pattern.chars() {
-        let pl = pc.to_lowercase().next().unwrap_or(pc);
-        if !chars
-            .by_ref()
-            .any(|tc| tc.to_lowercase().next().unwrap_or(tc) == pl)
-        {
-            return false;
-        }
-    }
-    true
-}
-
-fn fuzzy_score(query: &str, entry: &DesktopEntry) -> u32 {
-    let q = query.to_lowercase();
-    let name = entry.name.to_lowercase();
-    let wm = entry.wm_class.as_deref().unwrap_or("").to_lowercase();
-    if name == q || wm == q {
-        return 0;
-    }
-    if name.starts_with(&q) {
-        return 1;
-    }
-    if name.contains(&q) {
-        return 2;
-    }
-    if wm.starts_with(&q) || wm.contains(&q) {
-        return 3;
-    }
-    4 // subsequence match
-}
-
-// ---- UI ---------------------------------------------------------------------
-
-fn get_row_entry(row: &gtk4::ListBoxRow) -> Option<DesktopEntry> {
-    unsafe {
-        row.data::<DesktopEntry>("entry")
-            .map(|p| p.as_ref().clone())
+        format!("{n} {noun}s")
     }
 }
 
-fn visible_row_count(list: &ListBox) -> u32 {
-    let mut n = 0;
-    let mut i = 0;
+/// Counts the rows currently shown as real (non-header) app matches — the
+/// same "visible AND carries a `DesktopEntry`" test `ResultsList` itself
+/// uses for keyboard selection (`select_next`/`select_prev` in
+/// `bread_launcher::gtk`), reimplemented here read-only since `ResultsList`
+/// doesn't expose a count of its own.
+fn visible_app_count(list: &gtk4::ListBox) -> usize {
+    let mut i = 0i32;
+    let mut n = 0usize;
     while let Some(row) = list.row_at_index(i) {
-        if row.is_visible() {
+        if row.is_visible() && bread_launcher::gtk::row_entry(&row).is_some() {
             n += 1;
         }
         i += 1;
@@ -418,13 +209,7 @@ fn visible_row_count(list: &ListBox) -> u32 {
     n
 }
 
-fn set_footer_count(footer: &Label, n: u32) {
-    match n {
-        0 => footer.set_text("no match"),
-        1 => footer.set_text("1 app"),
-        n => footer.set_text(&format!("{n} apps")),
-    }
-}
+// ---- UI ---------------------------------------------------------------------
 
 fn run_ui(
     entries: Vec<DesktopEntry>,
@@ -442,15 +227,24 @@ fn run_ui(
     let app = builder.build();
 
     let history_rc = Rc::new(RefCell::new(history));
-    let query_rc: Rc<RefCell<String>> = Rc::new(RefCell::new(String::new()));
     let is_screenshot_run = screenshot_req.is_some();
 
     app.connect_activate(move |app| {
+        // Shell theme, loaded once per process and cached (see src/theme.rs)
+        // — the source of the launcher's geometry and style values below,
+        // per THEME_SYSTEM_PLAN.md §4/§11 Phase 4.
+        let shell_theme = theme::shell_theme();
+        let launcher = shell_theme.launcher().clone();
+
         // Shared ecosystem base (fonts, palette, generic widgets) first, then
         // breadbox-specific CSS layered on top — both hot-reload on
         // `bread-theme reload` (the closure re-reads the pywal palette).
         bread_theme::gtk::apply_shared();
-        bread_theme::gtk::apply_app_css(|| build_css(&load_palette()));
+        {
+            let launcher = launcher.clone();
+            let tokens = shell_theme.tokens().clone();
+            bread_theme::gtk::apply_app_css(move || build_css(&load_palette(), &launcher, &tokens));
+        }
 
         // User CSS override
         {
@@ -474,186 +268,69 @@ fn run_ui(
         vbox.add_css_class("launcher-bg");
         vbox.set_halign(gtk4::Align::Center);
         vbox.set_valign(gtk4::Align::Start);
-        vbox.set_margin_top(88);
-        vbox.set_size_request(600, -1);
-        if is_screenshot_run {
-            window.add_css_class("no-motion");
-            vbox.add_css_class("no-motion");
-        } else {
-            vbox.add_css_class("just-opened");
-        }
+        vbox.set_margin_top(theme::top_margin_px(&launcher.top));
+        // `set_size_request` only pins a MINIMUM, not a maximum — the same
+        // class of bug that made breadbar's capsule stretch to its widest
+        // row (`surface.rs`/`main.rs`'s `set_size_request` pin comment).
+        // This is safe here because `results.scroller` below is the
+        // `bread_launcher::gtk::ResultsList` widget, which already calls
+        // `scroller.set_propagate_natural_width(false)` specifically so its
+        // `ListBox`'s widest row (icon + full app name + wm-class) can never
+        // push a host wider than what the host requests — see that widget's
+        // own comment in `bread-launcher/src/gtk.rs`. `search` (a plain
+        // `SearchEntry`) has no unbounded natural width either. So nothing
+        // under `vbox` can grow past `launcher.width`, and this minimum-only
+        // request is effectively exact.
+        vbox.set_size_request(launcher.width, -1);
 
-        let search = Entry::new();
+        let search = SearchEntry::new();
+        // "Search", not the app's own name — matches both design demos'
+        // `<input placeholder="Search">` (bos-ui-demos/proposed/
+        // {liquid-motion,glass-workbench}.html); no user-visible copy here
+        // should read like an internal identifier.
         search.set_placeholder_text(Some("Search"));
-        search.set_has_frame(false);
         vbox.append(&search);
 
-        let caret = GBox::new(Orientation::Horizontal, 0);
-        caret.add_css_class("launcher-caret");
-        caret.set_hexpand(true);
-        vbox.append(&caret);
+        // Row building, fuzzy filtering, match/history sorting, and
+        // keyboard-style selection movement all live in bread-launcher's
+        // `ResultsList` — the widget breadbar's embedded capsule also uses
+        // (THEME_SYSTEM_PLAN.md §7). `[launcher].sections`: liquid-motion
+        // groups the idle view into "Recent"/"Apps" headers, glass-workbench
+        // stays the flat, ungrouped list — no longer hardcoded to `false`.
+        let results = ResultsList::new(
+            &entries,
+            launcher.icon_px,
+            Rc::clone(&history_rc),
+            launcher.sections,
+        );
 
-        let scroll = ScrolledWindow::new();
-        scroll.set_policy(PolicyType::Never, PolicyType::Automatic);
-        scroll.set_max_content_height(480);
-        scroll.set_propagate_natural_height(true);
+        vbox.append(&results.scroller);
 
-        let list = ListBox::new();
-        list.set_selection_mode(SelectionMode::Browse);
-
-        for (idx, entry) in entries.iter().enumerate() {
-            let row = gtk4::ListBoxRow::new();
-            if idx < STAGGER_ROWS {
-                row.add_css_class(&format!("stagger-{idx}"));
-            }
-            let hbox = GBox::new(Orientation::Horizontal, 0);
-            hbox.add_css_class("app-row");
-            hbox.set_valign(gtk4::Align::Center);
-
-            let well = GBox::new(Orientation::Horizontal, 0);
-            well.add_css_class("app-icon-well");
-            well.set_size_request(38, 38);
-            well.set_halign(gtk4::Align::Center);
-            well.set_valign(gtk4::Align::Center);
-            well.set_hexpand(false);
-            let icon = make_icon(entry);
-            icon.set_halign(gtk4::Align::Center);
-            icon.set_valign(gtk4::Align::Center);
-            icon.set_hexpand(true);
-            well.append(&icon);
-            hbox.append(&well);
-
-            let text = GBox::new(Orientation::Vertical, 1);
-            text.add_css_class("app-text");
-            text.set_hexpand(true);
-            text.set_valign(gtk4::Align::Center);
-
-            let name_lbl = Label::new(Some(&entry.name));
-            name_lbl.add_css_class("app-name");
-            name_lbl.set_xalign(0.0);
-            name_lbl.set_ellipsize(EllipsizeMode::End);
-            text.append(&name_lbl);
-
-            let sub_lbl = Label::new(Some(category_label(entry)));
-            sub_lbl.add_css_class("app-muted");
-            sub_lbl.set_xalign(0.0);
-            sub_lbl.set_ellipsize(EllipsizeMode::End);
-            text.append(&sub_lbl);
-
-            hbox.append(&text);
-            row.set_child(Some(&hbox));
-            unsafe { row.set_data("entry", entry.clone()) };
-            unsafe { row.set_data("initial_order", idx as u32) };
-            list.append(&row);
-        }
-
-        // Sort by match quality + launch count when a query is active;
-        // fall back to insertion order (priority + launch frequency) when empty.
-        let sort_query = Rc::clone(&query_rc);
-        let sort_history = Rc::clone(&history_rc);
-        list.set_sort_func(move |row_a, row_b| {
-            let query = sort_query.borrow();
-            if query.is_empty() {
-                let oa = unsafe {
-                    row_a
-                        .data::<u32>("initial_order")
-                        .map_or(u32::MAX, |p| *p.as_ref())
-                };
-                let ob = unsafe {
-                    row_b
-                        .data::<u32>("initial_order")
-                        .map_or(u32::MAX, |p| *p.as_ref())
-                };
-                return oa.cmp(&ob).into();
-            }
-            let (Some(ea), Some(eb)) = (get_row_entry(row_a), get_row_entry(row_b)) else {
-                return std::cmp::Ordering::Equal.into();
-            };
-            let sa = fuzzy_score(&query, &ea);
-            let sb = fuzzy_score(&query, &eb);
-            let history = sort_history.borrow();
-            let ca = history.count(&ea.name);
-            let cb = history.count(&eb.name);
-            sa.cmp(&sb)
-                .then(cb.cmp(&ca))
-                .then(ea.name.to_lowercase().cmp(&eb.name.to_lowercase()))
-                .into()
-        });
-
-        if let Some(first) = list.row_at_index(0) {
-            list.select_row(Some(&first));
-        }
-
-        scroll.set_child(Some(&list));
-        vbox.append(&scroll);
-
+        // Footer: "N applications" (liquid-motion) / "N results"
+        // (glass-workbench) — `[launcher].footer` selects the noun (see
+        // `footer_text`), updated alongside the query on every keystroke.
         let footer = Label::new(None);
         footer.add_css_class("launcher-footer");
         footer.set_xalign(0.0);
-        set_footer_count(&footer, visible_row_count(&list));
+        footer.set_label(&footer_text(&launcher.footer, visible_app_count(&results.list)));
         vbox.append(&footer);
 
         window.set_child(Some(&vbox));
 
-        if !is_screenshot_run {
-            let vbox_open = vbox.clone();
-            glib::timeout_add_local_once(Duration::from_millis(520), move || {
-                vbox_open.remove_css_class("just-opened");
-            });
-        }
-
-        // Filter on keystroke. ListBox keeps row identity across sort, so the
-        // reorder is already a cheap FLIP analog; a short CSS fade is the extra.
-        let list_f = list.clone();
+        // Filter on keystroke
+        let results_f = results.clone();
         let footer_f = footer.clone();
-        let vbox_f = vbox.clone();
-        let filter_query = Rc::clone(&query_rc);
-        let reflow_gen = Rc::new(Cell::new(0u32));
+        let footer_kind = launcher.footer.clone();
         search.connect_changed(move |entry| {
-            let text = entry.text();
-            let query = text.as_str();
-            *filter_query.borrow_mut() = query.to_string();
-            let mut i = 0i32;
-            while let Some(row) = list_f.row_at_index(i) {
-                let vis = get_row_entry(&row)
-                    .map(|e| {
-                        fuzzy_matches(query, &e.name)
-                            || fuzzy_matches(query, category_label(&e))
-                            || e.wm_class
-                                .as_deref()
-                                .is_some_and(|w| fuzzy_matches(query, w))
-                            || fuzzy_matches(query, &e.exec)
-                    })
-                    .unwrap_or(false);
-                row.set_visible(vis);
-                i += 1;
-            }
-            list_f.invalidate_sort();
-            let first_vis =
-                (0i32..).find_map(|j| list_f.row_at_index(j).filter(|r| r.is_visible()));
-            list_f.select_row(first_vis.as_ref());
-            set_footer_count(&footer_f, visible_row_count(&list_f));
-            if !vbox_f.has_css_class("just-opened") {
-                list_f.remove_css_class("reflow");
-                list_f.add_css_class("reflow");
-                let gen = reflow_gen.get().wrapping_add(1);
-                reflow_gen.set(gen);
-                let list_fade = list_f.clone();
-                let reflow_gen = Rc::clone(&reflow_gen);
-                glib::timeout_add_local_once(Duration::from_millis(180), move || {
-                    if reflow_gen.get() == gen {
-                        list_fade.remove_css_class("reflow");
-                    }
-                });
-            }
+            results_f.set_query(entry.text().as_str());
+            footer_f.set_label(&footer_text(&footer_kind, visible_app_count(&results_f.list)));
         });
 
         // Keyboard handling — capture phase on window
         let key_ctrl = EventControllerKey::new();
         key_ctrl.set_propagation_phase(gtk4::PropagationPhase::Capture);
         let close_k = Rc::clone(&close_all);
-        let list_k = list.clone();
-        let history_k = Rc::clone(&history_rc);
+        let results_k = results.clone();
         key_ctrl.connect_key_pressed(move |_, key, _, _| {
             use gtk4::gdk::Key;
             match key {
@@ -662,22 +339,19 @@ fn run_ui(
                     glib::Propagation::Stop
                 }
                 Key::Return | Key::KP_Enter => {
-                    if let Some(row) = list_k.selected_row() {
-                        if let Some(entry) = get_row_entry(&row) {
-                            history_k.borrow_mut().increment(&entry.name);
-                            history_k.borrow().save();
-                            do_launch(&entry);
-                            close_k();
-                        }
+                    if let Some(entry) = results_k.selected_entry() {
+                        results_k.record_launch(&entry);
+                        bread_launcher::do_launch(&entry, APP_ID, LAUNCHED_EVENT);
+                        close_k();
                     }
                     glib::Propagation::Stop
                 }
                 Key::Down => {
-                    bread_utils::gtk_popup::select_next_visible(&list_k);
+                    results_k.select_next();
                     glib::Propagation::Stop
                 }
                 Key::Up => {
-                    bread_utils::gtk_popup::select_prev_visible(&list_k);
+                    results_k.select_prev();
                     glib::Propagation::Stop
                 }
                 _ => glib::Propagation::Proceed,
@@ -687,12 +361,11 @@ fn run_ui(
 
         // Row click launches
         let close_a = Rc::clone(&close_all);
-        let history_a = Rc::clone(&history_rc);
-        list.connect_row_activated(move |_, row| {
-            if let Some(entry) = get_row_entry(row) {
-                history_a.borrow_mut().increment(&entry.name);
-                history_a.borrow().save();
-                do_launch(&entry);
+        let results_a = results.clone();
+        results.list.connect_row_activated(move |_, row| {
+            if let Some(entry) = row_entry(row) {
+                results_a.record_launch(&entry);
+                bread_launcher::do_launch(&entry, APP_ID, LAUNCHED_EVENT);
                 close_a();
             }
         });
@@ -733,6 +406,32 @@ fn main() {
     let cli = screenshot::Cli::parse();
     let screenshot_req = cli.screenshot_request();
 
+    // Under an `[launcher] mode = "embedded"` theme (spotlight,
+    // THEME_SYSTEM_PLAN.md §7 phase 6c), breadbar's own bar-drawer capsule
+    // IS the launcher — mapping this binary's overlay window on top of it
+    // would stack a second launcher over the capsule, exactly the bug a
+    // keybind that still directly execs `breadbox` (see the CLAUDE.md task
+    // notes: `bash -c breadbox` in ~/.config/hypr/binds.json) would hit
+    // every time. `--screenshot` runs are exempt — those exist to capture
+    // THIS binary's own overlay for its own screenshot views regardless of
+    // whatever theme happens to be active on the machine running them.
+    if screenshot_req.is_none()
+        && crate::theme::shell_theme().launcher().mode
+            == bread_theme::shell::LauncherMode::Embedded
+    {
+        // `dispatch_embedded_open` only returns `true` once it has confirmed
+        // breadd itself is reachable (`BreadClient::health`) and emitted the
+        // redirect — see its doc comment for why that is the strongest
+        // guarantee this transport can give (there is no ack from breadbar).
+        // When breadd is unreachable, fall through to mapping breadbox's own
+        // overlay below instead of returning: a keybind press must always
+        // open *something*, even under an embedded theme, rather than
+        // silently doing nothing because the bus happens to be down.
+        if dispatch_embedded_open() {
+            return;
+        }
+    }
+
     // `toggle_or_kill` kills whatever's holding the single-instance lock —
     // a real, already-running breadbox included. A screenshot run must
     // never touch it: it's a separate, disposable instance by design (same
@@ -764,9 +463,70 @@ fn main() {
         .map(|c| c.priority.clone())
         .unwrap_or_default();
 
-    let history = LaunchHistory::load();
+    let history = breadbox_shared::launch_history();
     let manifest = load_manifest();
-    let entries = load_sorted_entries(&manifest, &priority, &history);
+    let entries = bread_launcher::load_sorted_entries(&manifest, &priority, &history);
 
     run_ui(entries, history, screenshot_req);
+}
+
+/// Redirects an embedded-theme launch to the bus instead of mapping a
+/// window (see the `main` call site). breadbar's capsule (spotlight)
+/// subscribes to this and focuses/opens itself on receipt — see
+/// `breadbar/src/launcher_command.rs`.
+///
+/// Emits `bread.box.open_requested`, NOT `bread.command.box.open`. Two
+/// reasons, one mechanical and one semantic:
+///
+/// `BreadClient::emit` enforces that an app may only publish within its own
+/// `bread.<app_id>.*` namespace (`bread_utils::bread_client`'s
+/// `validate_app_namespace`). breadbox's app id is `box`, so a
+/// `bread.command.*` event is refused outright and the redirect silently did
+/// nothing but print a warning.
+///
+/// The guard is right, and the original name had the direction backwards.
+/// `bread.command.<app>.*` is a command addressed TO an app by an outside
+/// trigger — it is what breadbox's own `listen` subscribes to. An app
+/// emitting a command at itself would mean breadbox both sends and receives
+/// the same verb, which is also how the respawn loop `listen.rs` guards
+/// against arises. What actually happened here is an event: breadbox was
+/// asked to open and is reporting that, so it belongs in breadbox's own
+/// namespace as a past-tense fact.
+///
+/// Fire-and-forget, same as every other `BreadClient::emit` here — breadd
+/// being unreachable must never turn a keybind press into an error dialog or
+/// a hung process. But "nobody was listening" used to also mean "the
+/// keybind silently does nothing at all", which is the worst failure mode
+/// available for a launcher: no window, no error, nothing on stderr. This
+/// now checks reachability first (`BreadClient::health`, a real round trip
+/// with a bounded timeout) so the `main` call site can fall back to mapping
+/// breadbox's own overlay window when breadd itself is down — see its call
+/// site.
+///
+/// That fallback only covers "breadd is unreachable", not "breadd is up but
+/// nobody is subscribed" (breadbar isn't running, or is running under a
+/// non-Embedded theme and therefore never subscribed —
+/// `launcher_command.rs::spawn`). `BreadClient`'s API has no way to ask "is
+/// anything actually subscribed to this event" — `emit` has no ack and
+/// `health` only reports breadd's own liveness — so that narrower gap can't
+/// be closed without a bus-level ack protocol, which is out of scope here.
+/// Returns `true` iff breadd was reachable and the redirect was sent.
+fn dispatch_embedded_open() -> bool {
+    let client = bread_utils::bread_client::BreadClient::connect(APP_ID);
+    if client.health().is_none() {
+        eprintln!(
+            "breadbox: embedded launcher theme active but breadd is unreachable \
+             (health check failed); falling back to breadbox's own overlay window \
+             instead of a silent no-op"
+        );
+        return false;
+    }
+    client.emit(EMBEDDED_OPEN_EVENT, serde_json::json!({}));
+    eprintln!(
+        "breadbox: embedded launcher theme active; redirected the open request to \
+         '{EMBEDDED_OPEN_EVENT}' for breadbar's capsule to handle (breadd is \
+         reachable, but this is fire-and-forget with no ack — if breadbar isn't \
+         running or isn't subscribed, this is still a silent no-op on the bus)"
+    );
+    true
 }

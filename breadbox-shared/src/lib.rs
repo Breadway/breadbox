@@ -1,264 +1,59 @@
-use std::{
-    collections::HashMap,
-    env,
-    fs::{self, File},
-    io::{BufRead, BufReader},
-    path::{Path, PathBuf},
-};
+//! **Compatibility shim.** This crate used to own desktop-entry parsing,
+//! icon caching, and launch history; that substance now lives in
+//! `bread-launcher` (`bread-ecosystem`, feature/launcher-core) so breadbar's
+//! future embedded capsule can share it with breadbox's overlay window —
+//! one launcher implementation, two hosts (see
+//! `bos-ui-demos/THEME_SYSTEM_PLAN.md` §3, §7).
+//!
+//! Everything below is either a direct re-export of `bread_launcher`, or a
+//! thin wrapper that just bakes in `"breadbox"` as the app name
+//! `bread_launcher`'s path/cache functions now take explicitly (so more
+//! than one host can use that crate without colliding on
+//! `~/.cache/<app>`). This exists purely so `breadbox` and `breadbox-sync`
+//! keep compiling with minimal churn — plan to remove it once both callers
+//! depend on `bread-launcher` directly instead.
+//!
+//! `Config`/`Context` are NOT part of that move: they're breadbox's own
+//! per-workspace launch-priority config format, not launcher substance, so
+//! they stay here.
+
+use std::{fs, path::PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-// ---- XDG path helpers -------------------------------------------------------
+pub use bread_launcher::{
+    app_dirs, home_dir, load_all_desktop_entries, parse_desktop, strip_exec_codes, DesktopEntry,
+    IconCache, LaunchHistory,
+};
 
-pub fn home_dir() -> PathBuf {
-    PathBuf::from(env::var("HOME").unwrap_or_else(|_| "/tmp".into()))
-}
+/// The launcher's shared identity (`bread_launcher::LAUNCHER_APP`, currently
+/// `"breadbox"`) — NOT a breadbox-specific literal. breadbar's embedded
+/// capsule (theme 04/spotlight) reads/writes this exact same on-disk cache
+/// and history, so the two surfaces stay one launcher with one ranking
+/// instead of forking into two (see `LAUNCHER_APP`'s own doc comment).
+const APP: &str = bread_launcher::LAUNCHER_APP;
 
 pub fn cache_dir() -> PathBuf {
-    env::var("XDG_CACHE_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| home_dir().join(".cache"))
-        .join("breadbox")
+    bread_launcher::cache_dir(APP)
 }
 
 pub fn config_dir() -> PathBuf {
-    env::var("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| home_dir().join(".config"))
-        .join("breadbox")
+    bread_launcher::config_dir(APP)
 }
 
-pub fn app_dirs() -> Vec<PathBuf> {
-    let home = home_dir();
-    let mut dirs = vec![PathBuf::from("/usr/share/applications")];
-
-    let xdg_data_dirs = env::var("XDG_DATA_DIRS")
-        .unwrap_or_else(|_| "/usr/local/share:/usr/share".into());
-    for d in xdg_data_dirs.split(':') {
-        let p = PathBuf::from(d).join("applications");
-        if p != dirs[0] {
-            dirs.push(p);
-        }
-    }
-
-    dirs.push(
-        env::var("XDG_DATA_HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| home.join(".local/share"))
-            .join("applications"),
-    );
-    dirs
+pub fn icon_cache() -> IconCache {
+    IconCache::new(APP)
 }
 
-// ---- Desktop entry ----------------------------------------------------------
-
-#[derive(Debug, Clone)]
-pub struct DesktopEntry {
-    /// Desktop file id (the `.desktop` filename, e.g. `firefox.desktop`).
-    /// Empty only if the path had no file name; callers fall back to `exec`.
-    pub id: String,
-    pub name: String,
-    pub exec: String,
-    pub icon_name: String,
-    pub icon_path: Option<PathBuf>, // resolved by caller from manifest
-    pub categories: Vec<String>,
-    pub wm_class: Option<String>,
-    pub terminal: bool,
+pub fn icon_manifest_path() -> PathBuf {
+    IconCache::manifest_path(APP)
 }
 
-pub fn strip_exec_codes(exec: &str) -> String {
-    let mut out = String::with_capacity(exec.len());
-    let mut chars = exec.chars().peekable();
-    while let Some(c) = chars.next() {
-        if c == '%' {
-            match chars.peek().copied() {
-                Some('%') => {
-                    chars.next();
-                    out.push('%');
-                }
-                Some(n) if n.is_ascii_alphabetic() => {
-                    chars.next();
-                }
-                _ => out.push(c),
-            }
-        } else {
-            out.push(c);
-        }
-    }
-    out
+pub fn launch_history() -> LaunchHistory {
+    LaunchHistory::load(APP)
 }
 
-/// Returns `None` for entries that should not be shown (hidden, NoDisplay, non-Application type).
-pub fn parse_desktop(path: &Path) -> Option<DesktopEntry> {
-    let file = File::open(path).ok()?;
-    let mut in_entry = false;
-    let mut name: Option<String> = None;
-    let mut exec: Option<String> = None;
-    let mut icon: Option<String> = None;
-    let mut categories: Option<String> = None;
-    let mut wm_class: Option<String> = None;
-    let mut app_type: Option<String> = None;
-    let mut no_display = false;
-    let mut hidden = false;
-    let mut terminal = false;
-
-    for line in BufReader::new(file).lines() {
-        let Ok(raw) = line else { continue };
-        let s = raw.trim();
-        if s.starts_with('#') || s.is_empty() {
-            continue;
-        }
-        if s.starts_with('[') {
-            in_entry = s == "[Desktop Entry]";
-            continue;
-        }
-        if !in_entry {
-            continue;
-        }
-
-        if let Some(v) = s.strip_prefix("Name=") {
-            name.get_or_insert_with(|| v.to_string());
-        } else if let Some(v) = s.strip_prefix("Exec=") {
-            exec.get_or_insert_with(|| v.to_string());
-        } else if let Some(v) = s.strip_prefix("Icon=") {
-            icon.get_or_insert_with(|| v.to_string());
-        } else if let Some(v) = s.strip_prefix("Categories=") {
-            categories.get_or_insert_with(|| v.to_string());
-        } else if let Some(v) = s.strip_prefix("StartupWMClass=") {
-            wm_class.get_or_insert_with(|| v.to_string());
-        } else if let Some(v) = s.strip_prefix("Type=") {
-            app_type.get_or_insert_with(|| v.to_string());
-        } else if let Some(v) = s.strip_prefix("NoDisplay=") {
-            no_display = v == "true";
-        } else if let Some(v) = s.strip_prefix("Hidden=") {
-            hidden = v == "true";
-        } else if let Some(v) = s.strip_prefix("Terminal=") {
-            terminal = v == "true" || v == "1";
-        }
-    }
-
-    if no_display || hidden {
-        return None;
-    }
-    if app_type.as_deref() != Some("Application") {
-        return None;
-    }
-
-    let name = name?.trim().to_string();
-    let exec = strip_exec_codes(exec?.trim()).trim().to_string();
-    if name.is_empty() || exec.is_empty() {
-        return None;
-    }
-
-    let icon_name = icon.unwrap_or_default().trim().to_string();
-    let cats = categories
-        .unwrap_or_default()
-        .split(';')
-        .filter(|s| !s.is_empty())
-        .map(|s| s.to_string())
-        .collect();
-
-    let id = path
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .filter(|s| !s.is_empty())
-        .unwrap_or_default();
-
-    Some(DesktopEntry {
-        id,
-        name,
-        exec,
-        icon_name,
-        icon_path: None,
-        categories: cats,
-        wm_class: wm_class.map(|s| s.trim().to_string()).filter(|s| !s.is_empty()),
-        terminal,
-    })
-}
-
-/// Walk all configured application directories and return deduplicated entries.
-/// Entries from later directories (user-local) override those from earlier ones.
-pub fn load_all_desktop_entries() -> Vec<DesktopEntry> {
-    let mut seen: std::collections::HashMap<String, DesktopEntry> = std::collections::HashMap::new();
-    for dir in app_dirs() {
-        let Ok(entries) = fs::read_dir(&dir) else { continue };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) != Some("desktop") {
-                continue;
-            }
-            let key = entry.file_name().to_string_lossy().into_owned();
-            if let Some(app) = parse_desktop(&path) {
-                seen.insert(key, app);
-            }
-        }
-    }
-    seen.into_values().collect()
-}
-
-// ---- Icon cache -------------------------------------------------------------
-
-pub struct IconCache {
-    pub dir: PathBuf,
-}
-
-impl IconCache {
-    pub fn new() -> Self {
-        IconCache { dir: cache_dir().join("icons") }
-    }
-
-    pub fn path_for(&self, icon_name: &str) -> PathBuf {
-        self.dir.join(format!("{}.png", icon_name))
-    }
-
-    pub fn manifest_path() -> PathBuf {
-        cache_dir().join("manifest.json")
-    }
-
-    pub fn ensure_dir(&self) -> std::io::Result<()> {
-        fs::create_dir_all(&self.dir)
-    }
-}
-
-impl Default for IconCache {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-// ---- Launch history ---------------------------------------------------------
-
-pub struct LaunchHistory {
-    counts: HashMap<String, u32>,
-    path: PathBuf,
-}
-
-impl LaunchHistory {
-    pub fn load() -> Self {
-        let path = cache_dir().join("history.json");
-        let counts = fs::read_to_string(&path)
-            .ok()
-            .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_default();
-        LaunchHistory { counts, path }
-    }
-
-    pub fn count(&self, name: &str) -> u32 {
-        self.counts.get(name).copied().unwrap_or(0)
-    }
-
-    pub fn increment(&mut self, name: &str) {
-        *self.counts.entry(name.to_string()).or_insert(0) += 1;
-    }
-
-    pub fn save(&self) {
-        if let Ok(json) = serde_json::to_string(&self.counts) {
-            let _ = fs::write(&self.path, json);
-        }
-    }
-}
-
-// ---- Config -----------------------------------------------------------------
+// ---- Config (breadbox-specific, not launcher substance) --------------------
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Config {

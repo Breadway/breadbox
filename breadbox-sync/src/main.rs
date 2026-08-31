@@ -205,7 +205,7 @@ fn main() {
 }
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
-    let icon_cache = IconCache::new();
+    let icon_cache = breadbox_shared::icon_cache();
     icon_cache.ensure_dir()?;
 
     let theme = current_icon_theme();
@@ -266,7 +266,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    let manifest_path = IconCache::manifest_path();
+    let manifest_path = breadbox_shared::icon_manifest_path();
     let json = serde_json::to_string_pretty(&manifest)?;
     let tmp = manifest_path.with_extension("tmp");
     fs::write(&tmp, &json)?;
