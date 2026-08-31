@@ -236,9 +236,8 @@ fn run_ui(
         let shell_theme = theme::shell_theme();
         let launcher = shell_theme.launcher().clone();
 
-        // Shared ecosystem base (fonts, palette, generic widgets) first, then
-        // breadbox-specific CSS layered on top — both hot-reload on
-        // `bread-theme reload` (the closure re-reads the pywal palette).
+        // Shared ecosystem base (fonts, palette, generic widgets) as a
+        // display-level fallback; the real per-window sheet is bound below.
         bread_theme::gtk::apply_shared();
         {
             let launcher = launcher.clone();
@@ -255,7 +254,22 @@ fn run_ui(
 
         // Full-screen transparent overlay; panel widget is positioned inside it.
         let window = bread_utils::gtk_popup::new_overlay_window(app, "breadbox");
-        bread_theme::gtk::bind_window_auto(&window);
+        // Bind the *app* sheet — not just the shared one — as the widget-tree
+        // provider. `bind_window_auto` alone re-broadcasts the shared
+        // component sheet (which includes `window { background-color: @bg }`)
+        // at USER-10, outranking our APPLICATION-priority
+        // `window { background-color: transparent }` regardless of specificity
+        // — so the "transparent overlay" paints solid @bg and the launcher
+        // covers the screen in an opaque black rectangle (worse under a VM's
+        // software renderer, where there's no GL to mask it). `_with_app_css`
+        // rides our sheet at USER-9, back on top.
+        {
+            let launcher = launcher.clone();
+            let tokens = shell_theme.tokens().clone();
+            bread_theme::gtk::bind_window_auto_with_app_css(&window, move |p| {
+                build_css(p, &launcher, &tokens)
+            });
+        }
 
         let close_all: Rc<dyn Fn()> = Rc::new({
             let w = window.clone();
