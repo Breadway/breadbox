@@ -72,7 +72,15 @@ fn handle_open() {
     // own output) and emit a distinct, explicitly-unconfirmed event so a bus
     // observer can tell "redirected, outcome unknown" apart from "breadbox
     // spawned" rather than being told a specific untrue thing.
-    if crate::theme::shell_theme().launcher().mode == bread_theme::shell::LauncherMode::Embedded {
+    // Read the theme fresh, NOT via `crate::theme::shell_theme()`: that
+    // accessor caches `shell::load()` for the life of the process, and
+    // `breadbox listen` is long-lived (unlike every other breadbox
+    // invocation, which is a one-shot window). If the user switches shell
+    // themes while `listen` is running, a cached value here would make the
+    // wrong embedded-vs-spawn decision until the next restart. `listen` has
+    // no glib main loop, so it can't run `shell::watch()`; re-reading on
+    // each `open` (a rare, user-driven event) is the simplest correct fix.
+    if bread_theme::shell::load().launcher().mode == bread_theme::shell::LauncherMode::Embedded {
         eprintln!(
             "breadbox: bread.command.box.open received under an embedded launcher \
              theme; breadbar's capsule is the intended handler and this process \
