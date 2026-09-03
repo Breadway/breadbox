@@ -1,5 +1,5 @@
 use bread_launcher::gtk::{row_entry, ResultsList};
-use bread_theme::{hex_to_rgba, ink_on, load_palette, Palette};
+use bread_theme::load_palette;
 use std::{
     cell::RefCell,
     collections::HashMap,
@@ -25,8 +25,8 @@ const LAUNCHED_EVENT: &str = "bread.box.launched";
 
 use breadbox_shared::{config_dir, Config, DesktopEntry, LaunchHistory};
 use gtk4::{
-    glib, prelude::*, Application, Box as GBox, CssProvider,
-    EventControllerKey, Label, Orientation, SearchEntry,
+    glib, prelude::*, Application, Box as GBox, CssProvider, EventControllerKey, Label,
+    Orientation, SearchEntry,
 };
 
 mod listen;
@@ -65,110 +65,15 @@ fn load_manifest() -> HashMap<String, PathBuf> {
 
 // ---- Theming ----------------------------------------------------------------
 
-fn build_css(
-    p: &Palette,
-    launcher: &bread_theme::shell::Launcher,
-    tokens: &bread_theme::shell::Tokens,
-) -> String {
-    // Panel opacity comes from the theme, not a hardcoded constant. 0.60 made
-    // the launcher wash out over a bright wallpaper and its text hard to read —
-    // a bar can be that translucent because it covers a thin strip, a full
-    // panel cannot. The approved reference uses 0.95/0.93 per theme.
-    let bg_panel = hex_to_rgba(&p.background, launcher.panel_alpha as f32);
-    let radius = format!("{}px", launcher.radius);
-    let on_bg = ink_on(&p.background);
-    // breadbox-specific rules only — the generic widget baseline (buttons,
-    // switches, plain `entry`/`spinbutton`) comes from the shared ecosystem
-    // stylesheet, applied first (lower priority) in connect_activate via
-    // `apply_shared`. Colour is set on each surface (panel, search box,
-    // hovered/selected row) so child labels inherit the legible ink for that
-    // background. `on_*` are luminance-picked black/white — the pywal hues
-    // are untouched. Without this a light `surface` slot makes the selected
-    // row's text vanish.
-    //
-    // Selectors matter here: GTK4's `GtkSearchEntry` CSS node is `entry`
-    // carrying a `.search` style class (confirmed against
-    // `/usr/share/gir-1.0/Gtk-4.0.gir`'s `SearchEntry` "## CSS Nodes" doc,
-    // `entry.search ╰── text`) — NOT a node literally named `searchentry`,
-    // and `GtkListBox`'s node is `list`, NOT `listbox`. Both bogus selectors
-    // shipped here previously and silently matched nothing, which is why
-    // this rule block's `border`/`outline` suppression never actually beat
-    // the shared stylesheet's `entry:focus-within { border-color: @accent }`
-    // rule (`bread_theme::stylesheet`, still layered in underneath at
-    // APPLICATION priority) — the accent-coloured focus "outline" the user
-    // was seeing was that shared rule showing through unopposed. `entry`
-    // alone (no `.search`) would work too since this window has only one
-    // entry, but `.search` documents which GtkSearchEntry state this targets
-    // and is what actually renders.
-    //
-    // Per-theme geometry now comes entirely from `[launcher]`/`[tokens]` —
-    // liquid-motion and glass-workbench set every one of these to different
-    // values (see their `assets/shell/*/theme.toml`), which is what makes
-    // the two themes read as different instruments rather than one
-    // launcher recoloured.
+/// The active shell theme's full stylesheet (`bread_theme::shell::ShellTheme::css`)
+/// plus breadbox's one structural rule: its overlay window is transparent —
+/// not theme-dependent, so not part of the shell template. `@name` palette
+/// references stay intact for `bind_window_auto_with_app_css` to inline
+/// against the bound output.
+fn app_css() -> String {
     format!(
-        "window {{ background-color: transparent; }}\
-         .launcher-bg {{ background-color: {bg_panel}; color: {on_bg}; border-radius: {radius};\
-             /* NO drop shadow. In a browser `backdrop-filter` blurs only the\
-                element's own box, so the demo's shadow is free. Hyprland\
-                blurs any surface pixel above `ignore_alpha` (0.2), and a\
-                32px shadow at 0.6 alpha is far above it — so the compositor\
-                blurred the shadow as well, painting a rectangular blurred\
-                halo around the rounded panel. That halo is the \"blur\
-                backdrop whose radius doesn't match the content\" problem.\
-                The blur behind a 0.95-opaque panel already gives plenty of\
-                separation; the shadow only fought it. */\
-             font-family: \"{font_family}\", {font_fallback}; }}\
-         entry.search {{ background-color: transparent; color: {on_bg}; caret-color: {accent};\
-             border: none; outline: none; box-shadow: none; border-radius: 0;\
-             border-bottom: 1px solid {hairline};\
-             padding: {search_pv}px {search_ph}px; font-size: {search_fs}px; }}\
-         entry.search:focus, entry.search:focus-within {{\
-             outline: none; box-shadow: none; border-color: transparent;\
-             border-bottom: 1px solid {hairline}; }}\
-         list {{ background-color: transparent; padding: 4px 0; }}\
-         row {{ padding: {row_pv}px {row_ph}px; margin: 0 {row_inset}px; color: {on_bg};\
-             background-color: transparent; border-radius: {row_radius}px;\
-             font-size: {row_fs}px; }}\
-         row:hover, row:selected {{ background-color: {selection_bg}; color: {on_bg}; }}\
-         .app-muted {{ opacity: 0.4; font-size: 11px; }}\
-         /* No background tile: these are real app icons, not the demo's\
-            placeholder .ico boxes. A tint behind a real icon reads as a\
-            failed/unloaded image. */\
-         image {{ margin-right: 8px; border-radius: {icon_radius}px; }}\
-         /* \"Recent\"/\"Apps\" headers (`[launcher].sections`, liquid-motion\
-            only — glass-workbench's flat list never builds these rows). */\
-         .section-header-label {{ font-size: 10px; letter-spacing: 0.14em;\
-             text-transform: uppercase; font-weight: 600; opacity: 0.45; }}\
-         .bread-drawer-section-header {{ padding: 11px 16px 5px; }}\
-         .launcher-footer {{ padding: 8px 16px 12px; font-size: 10px; opacity: 0.4;\
-             {footer_case} }}",
-        bg_panel      = bg_panel,
-        accent        = hex_to_rgba(&p.color4, 0.9),
-        on_bg         = on_bg,
-        hairline      = hex_to_rgba(on_bg, 0.08),
-        selection_bg  = hex_to_rgba(&p.color4, launcher.selection_alpha as f32),
-        radius        = radius,
-        font_family   = tokens.font_family(),
-        font_fallback = tokens.font_fallback(),
-        row_fs        = tokens.font_size_base(),
-        row_pv        = launcher.row_padding_v,
-        row_ph        = launcher.row_padding_h,
-        row_inset     = launcher.row_inset,
-        row_radius    = launcher.row_radius,
-        icon_radius   = launcher.icon_radius,
-        search_pv     = launcher.search_padding_v,
-        search_ph     = launcher.search_padding_h,
-        search_fs     = launcher.search_font_size,
-        // Section headers and an uppercase, letter-spaced footer travel
-        // together in both demos (liquid-motion has both; glass-workbench's
-        // flat list has neither) — reusing `sections` here instead of a
-        // dedicated schema key for this one footer detail.
-        footer_case   = if launcher.sections {
-            "text-transform: uppercase; letter-spacing: 0.12em;"
-        } else {
-            ""
-        },
+        "{}\nwindow {{ background-color: transparent; }}\n",
+        theme::shell_theme().css(&load_palette())
     )
 }
 
@@ -240,9 +145,7 @@ fn run_ui(
         // display-level fallback; the real per-window sheet is bound below.
         bread_theme::gtk::apply_shared();
         {
-            let launcher = launcher.clone();
-            let tokens = shell_theme.tokens().clone();
-            bread_theme::gtk::apply_app_css(move || build_css(&load_palette(), &launcher, &tokens));
+            bread_theme::gtk::apply_app_css(app_css);
         }
 
         // User CSS override
@@ -264,11 +167,7 @@ fn run_ui(
         // software renderer, where there's no GL to mask it). `_with_app_css`
         // rides our sheet at USER-9, back on top.
         {
-            let launcher = launcher.clone();
-            let tokens = shell_theme.tokens().clone();
-            bread_theme::gtk::bind_window_auto_with_app_css(&window, move |p| {
-                build_css(p, &launcher, &tokens)
-            });
+            bread_theme::gtk::bind_window_auto_with_app_css(&window, |_p| app_css());
         }
 
         let close_all: Rc<dyn Fn()> = Rc::new({
@@ -326,7 +225,10 @@ fn run_ui(
         let footer = Label::new(None);
         footer.add_css_class("launcher-footer");
         footer.set_xalign(0.0);
-        footer.set_label(&footer_text(&launcher.footer, visible_app_count(&results.list)));
+        footer.set_label(&footer_text(
+            &launcher.footer,
+            visible_app_count(&results.list),
+        ));
         vbox.append(&footer);
 
         window.set_child(Some(&vbox));
@@ -337,7 +239,10 @@ fn run_ui(
         let footer_kind = launcher.footer.clone();
         search.connect_changed(move |entry| {
             results_f.set_query(entry.text().as_str());
-            footer_f.set_label(&footer_text(&footer_kind, visible_app_count(&results_f.list)));
+            footer_f.set_label(&footer_text(
+                &footer_kind,
+                visible_app_count(&results_f.list),
+            ));
         });
 
         // Keyboard handling — capture phase on window
@@ -440,8 +345,7 @@ fn main() {
     // THIS binary's own overlay for its own screenshot views regardless of
     // whatever theme happens to be active on the machine running them.
     if screenshot_req.is_none()
-        && crate::theme::shell_theme().launcher().mode
-            == bread_theme::shell::LauncherMode::Embedded
+        && crate::theme::shell_theme().launcher().mode == bread_theme::shell::LauncherMode::Embedded
     {
         // `dispatch_embedded_open` only returns `true` once it has confirmed
         // breadd itself is reachable (`BreadClient::health`) and emitted the
