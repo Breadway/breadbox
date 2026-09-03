@@ -125,8 +125,8 @@ dependencies = [
 
 [[package]]
 name = "bread-theme"
-version = "0.7.5"
-source = "git+https://git.breadway.dev/Breadway/bread-ecosystem?tag=v0.7.5#46b886b7bc168e73945269e143b18ef8a0d987f8"
+version = "0.7.7"
+source = "git+https://git.breadway.dev/Breadway/bread-ecosystem?tag=v0.7.7#3577e0d312493218b5a0cccefbd821d9de87cbcf"
 dependencies = [
  "anyhow",
  "dirs 5.0.1",
@@ -559,7 +559,7 @@ dependencies = [
  "gobject-sys",
  "libc",
  "system-deps 7.0.8",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
