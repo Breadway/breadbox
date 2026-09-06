@@ -114,7 +114,7 @@ fn canonical_icon_name(icon: &str) -> String {
         .to_string()
 }
 
-/// A stem like `org.gnome.Gedit` or `com.github.App` — at least three segments,
+/// A stem like `org.gnome.Gedit` or `com.github.App`: at least three segments,
 /// all alphanumeric/hyphen/underscore.
 fn looks_like_reverse_dns(stem: &str) -> bool {
     let parts: Vec<&str> = stem.split('.').collect();

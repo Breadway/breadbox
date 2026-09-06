@@ -11,15 +11,15 @@ use std::{
 };
 
 /// This app's id in bread's sibling-app namespace registry
-/// (`bread_shared::apps::KNOWN_APPS`) — events publish as `bread.box.*`.
+/// (`bread_shared::apps::KNOWN_APPS`); events publish as `bread.box.*`.
 const APP_ID: &str = "box";
 
 /// Emitted instead of mapping breadbox's own window when the active shell
 /// theme's launcher is embedded (theme 04's capsule). Must stay inside
-/// `bread.box.*` — see [`dispatch_embedded_open`] for why.
+/// `bread.box.*`; see [`dispatch_embedded_open`] for why.
 pub const EMBEDDED_OPEN_EVENT: &str = "bread.box.open_requested";
 
-/// Published via `bread_launcher::do_launch` after a successful launch —
+/// Published via `bread_launcher::do_launch` after a successful launch;
 /// see `EVENTS.md`.
 const LAUNCHED_EVENT: &str = "bread.box.launched";
 
@@ -66,7 +66,7 @@ fn load_manifest() -> HashMap<String, PathBuf> {
 // ---- Theming ----------------------------------------------------------------
 
 /// The active shell theme's full stylesheet (`bread_theme::shell::ShellTheme::css`)
-/// plus breadbox's one structural rule: its overlay window is transparent —
+/// plus breadbox's one structural rule: its overlay window is transparent,
 /// not theme-dependent, so not part of the shell template. `@name` palette
 /// references stay intact for `bind_window_auto_with_app_css` to inline
 /// against the bound output.
@@ -78,7 +78,7 @@ fn app_css() -> String {
 }
 
 /// `[launcher].footer`'s noun: `"count_apps"` → "applications", anything
-/// else (`"count_results"` included — every other current/future value
+/// else (`"count_results"` included; every other current/future value
 /// falls back to this rather than a hard error, matching the "never fails
 /// to start over a theme string" rule the rest of this schema follows) →
 /// "results". `n`'s plural/singular form is picked here rather than baked
@@ -97,7 +97,7 @@ fn footer_text(footer_kind: &str, n: usize) -> String {
     }
 }
 
-/// Counts the rows currently shown as real (non-header) app matches — the
+/// Counts the rows currently shown as real (non-header) app matches: the
 /// same "visible AND carries a `DesktopEntry`" test `ResultsList` itself
 /// uses for keyboard selection (`select_next`/`select_prev` in
 /// `bread_launcher::gtk`), reimplemented here read-only since `ResultsList`
@@ -135,8 +135,8 @@ fn run_ui(
     let is_screenshot_run = screenshot_req.is_some();
 
     app.connect_activate(move |app| {
-        // Shell theme, loaded once per process and cached (see src/theme.rs)
-        // — the source of the launcher's geometry and style values below,
+        // Shell theme, loaded once per process and cached (see src/theme.rs):
+        // the source of the launcher's geometry and style values below,
         // per THEME_SYSTEM_PLAN.md §4/§11 Phase 4.
         let shell_theme = theme::shell_theme();
         let launcher = shell_theme.launcher().clone();
@@ -157,12 +157,12 @@ fn run_ui(
 
         // Full-screen transparent overlay; panel widget is positioned inside it.
         let window = bread_utils::gtk_popup::new_overlay_window(app, "breadbox");
-        // Bind the *app* sheet — not just the shared one — as the widget-tree
+        // Bind the *app* sheet (not just the shared one) as the widget-tree
         // provider. `bind_window_auto` alone re-broadcasts the shared
         // component sheet (which includes `window { background-color: @bg }`)
         // at USER-10, outranking our APPLICATION-priority
-        // `window { background-color: transparent }` regardless of specificity
-        // — so the "transparent overlay" paints solid @bg and the launcher
+        // `window { background-color: transparent }` regardless of specificity,
+        // so the "transparent overlay" paints solid @bg and the launcher
         // covers the screen in an opaque black rectangle (worse under a VM's
         // software renderer, where there's no GL to mask it). `_with_app_css`
         // rides our sheet at USER-9, back on top.
@@ -182,14 +182,14 @@ fn run_ui(
         vbox.set_halign(gtk4::Align::Center);
         vbox.set_valign(gtk4::Align::Start);
         vbox.set_margin_top(theme::top_margin_px(&launcher.top));
-        // `set_size_request` only pins a MINIMUM, not a maximum — the same
+        // `set_size_request` only pins a MINIMUM, not a maximum: the same
         // class of bug that made breadbar's capsule stretch to its widest
         // row (`surface.rs`/`main.rs`'s `set_size_request` pin comment).
         // This is safe here because `results.scroller` below is the
         // `bread_launcher::gtk::ResultsList` widget, which already calls
         // `scroller.set_propagate_natural_width(false)` specifically so its
         // `ListBox`'s widest row (icon + full app name + wm-class) can never
-        // push a host wider than what the host requests — see that widget's
+        // push a host wider than what the host requests; see that widget's
         // own comment in `bread-launcher/src/gtk.rs`. `search` (a plain
         // `SearchEntry`) has no unbounded natural width either. So nothing
         // under `vbox` can grow past `launcher.width`, and this minimum-only
@@ -197,7 +197,7 @@ fn run_ui(
         vbox.set_size_request(launcher.width, -1);
 
         let search = SearchEntry::new();
-        // "Search", not the app's own name — matches both design demos'
+        // "Search", not the app's own name: matches both design demos'
         // `<input placeholder="Search">` (bos-ui-demos/proposed/
         // {liquid-motion,glass-workbench}.html); no user-visible copy here
         // should read like an internal identifier.
@@ -206,10 +206,10 @@ fn run_ui(
 
         // Row building, fuzzy filtering, match/history sorting, and
         // keyboard-style selection movement all live in bread-launcher's
-        // `ResultsList` — the widget breadbar's embedded capsule also uses
+        // `ResultsList`: the widget breadbar's embedded capsule also uses
         // (THEME_SYSTEM_PLAN.md §7). `[launcher].sections`: liquid-motion
         // groups the idle view into "Recent"/"Apps" headers, glass-workbench
-        // stays the flat, ungrouped list — no longer hardcoded to `false`.
+        // stays the flat, ungrouped list (no longer hardcoded to `false`).
         let results = ResultsList::new(
             &entries,
             launcher.icon_px,
@@ -220,7 +220,7 @@ fn run_ui(
         vbox.append(&results.scroller);
 
         // Footer: "N applications" (liquid-motion) / "N results"
-        // (glass-workbench) — `[launcher].footer` selects the noun (see
+        // (glass-workbench): `[launcher].footer` selects the noun (see
         // `footer_text`), updated alongside the query on every keystroke.
         let footer = Label::new(None);
         footer.add_css_class("launcher-footer");
@@ -245,7 +245,7 @@ fn run_ui(
             ));
         });
 
-        // Keyboard handling — capture phase on window
+        // Keyboard handling: capture phase on window
         let key_ctrl = EventControllerKey::new();
         key_ctrl.set_propagation_phase(gtk4::PropagationPhase::Capture);
         let close_k = Rc::clone(&close_all);
@@ -337,11 +337,11 @@ fn main() {
 
     // Under an `[launcher] mode = "embedded"` theme (spotlight,
     // THEME_SYSTEM_PLAN.md §7 phase 6c), breadbar's own bar-drawer capsule
-    // IS the launcher — mapping this binary's overlay window on top of it
+    // IS the launcher: mapping this binary's overlay window on top of it
     // would stack a second launcher over the capsule, exactly the bug a
     // keybind that still directly execs `breadbox` (see the CLAUDE.md task
     // notes: `bash -c breadbox` in ~/.config/hypr/binds.json) would hit
-    // every time. `--screenshot` runs are exempt — those exist to capture
+    // every time. `--screenshot` runs are exempt: those exist to capture
     // THIS binary's own overlay for its own screenshot views regardless of
     // whatever theme happens to be active on the machine running them.
     if screenshot_req.is_none()
@@ -349,7 +349,7 @@ fn main() {
     {
         // `dispatch_embedded_open` only returns `true` once it has confirmed
         // breadd itself is reachable (`BreadClient::health`) and emitted the
-        // redirect — see its doc comment for why that is the strongest
+        // redirect; see its doc comment for why that is the strongest
         // guarantee this transport can give (there is no ack from breadbar).
         // When breadd is unreachable, fall through to mapping breadbox's own
         // overlay below instead of returning: a keybind press must always
@@ -360,13 +360,13 @@ fn main() {
         }
     }
 
-    // `toggle_or_kill` kills whatever's holding the single-instance lock —
+    // `toggle_or_kill` kills whatever's holding the single-instance lock:
     // a real, already-running breadbox included. A screenshot run must
     // never touch it: it's a separate, disposable instance by design (same
     // reasoning as breadbar's `allow_multiple_instances`), not a toggle of
     // the operator's real launcher.
     //
-    // Kept alive for the rest of `main` — dropping it releases the
+    // Kept alive for the rest of `main`: dropping it releases the
     // single-instance lock and removes the pid file, which happens
     // naturally once `run_ui` returns (after the window closes).
     let _singleton_guard = if screenshot_req.is_some() {
@@ -400,7 +400,7 @@ fn main() {
 
 /// Redirects an embedded-theme launch to the bus instead of mapping a
 /// window (see the `main` call site). breadbar's capsule (spotlight)
-/// subscribes to this and focuses/opens itself on receipt — see
+/// subscribes to this and focuses/opens itself on receipt; see
 /// `breadbar/src/launcher_command.rs`.
 ///
 /// Emits `bread.box.open_requested`, NOT `bread.command.box.open`. Two
@@ -414,30 +414,30 @@ fn main() {
 ///
 /// The guard is right, and the original name had the direction backwards.
 /// `bread.command.<app>.*` is a command addressed TO an app by an outside
-/// trigger — it is what breadbox's own `listen` subscribes to. An app
+/// trigger: it is what breadbox's own `listen` subscribes to. An app
 /// emitting a command at itself would mean breadbox both sends and receives
 /// the same verb, which is also how the respawn loop `listen.rs` guards
 /// against arises. What actually happened here is an event: breadbox was
 /// asked to open and is reporting that, so it belongs in breadbox's own
 /// namespace as a past-tense fact.
 ///
-/// Fire-and-forget, same as every other `BreadClient::emit` here — breadd
+/// Fire-and-forget, same as every other `BreadClient::emit` here: breadd
 /// being unreachable must never turn a keybind press into an error dialog or
 /// a hung process. But "nobody was listening" used to also mean "the
 /// keybind silently does nothing at all", which is the worst failure mode
 /// available for a launcher: no window, no error, nothing on stderr. This
 /// now checks reachability first (`BreadClient::health`, a real round trip
 /// with a bounded timeout) so the `main` call site can fall back to mapping
-/// breadbox's own overlay window when breadd itself is down — see its call
+/// breadbox's own overlay window when breadd itself is down; see its call
 /// site.
 ///
 /// That fallback only covers "breadd is unreachable", not "breadd is up but
 /// nobody is subscribed" (breadbar isn't running, or is running under a
-/// non-Embedded theme and therefore never subscribed —
-/// `launcher_command.rs::spawn`). `BreadClient`'s API has no way to ask "is
-/// anything actually subscribed to this event" — `emit` has no ack and
-/// `health` only reports breadd's own liveness — so that narrower gap can't
-/// be closed without a bus-level ack protocol, which is out of scope here.
+/// non-Embedded theme and therefore never subscribed; see
+/// `launcher_command.rs::spawn`). `BreadClient`'s API has no way to ask
+/// whether anything is actually subscribed to this event: `emit` has no ack,
+/// and `health` only reports breadd's own liveness. So that narrower gap
+/// can't be closed without a bus-level ack protocol, which is out of scope here.
 /// Returns `true` iff breadd was reachable and the redirect was sent.
 fn dispatch_embedded_open() -> bool {
     let client = bread_utils::bread_client::BreadClient::connect(APP_ID);
@@ -453,7 +453,7 @@ fn dispatch_embedded_open() -> bool {
     eprintln!(
         "breadbox: embedded launcher theme active; redirected the open request to \
          '{EMBEDDED_OPEN_EVENT}' for breadbar's capsule to handle (breadd is \
-         reachable, but this is fire-and-forget with no ack — if breadbar isn't \
+         reachable, but this is fire-and-forget with no ack: if breadbar isn't \
          running or isn't subscribed, this is still a silent no-op on the bus)"
     );
     true

@@ -29,7 +29,7 @@ pub fn run() {
     }
 }
 
-/// Reacts to `bread.command.box.*` verbs. Only `open` is honored today —
+/// Reacts to `bread.command.box.*` verbs. Only `open` is honored today;
 /// other verbs are ignored, not stubbed as no-ops that pretend to succeed.
 fn handle_command(event: &BreadEvent) {
     let Some(verb) = command_verb(&event.event) else {
@@ -48,23 +48,23 @@ fn handle_open() {
 
     // Under an embedded-launcher theme (spotlight), breadbar's own capsule
     // subscribes to both this command and `bread.box.open_requested` (see
-    // `main.rs`'s `dispatch_embedded_open` doc comment) — it, not this
+    // `main.rs`'s `dispatch_embedded_open` doc comment); it, not this
     // process, is the thing that should react. Spawning `breadbox` here
     // would just re-run that same binary's own embedded-mode redirect
     // (`main`'s `dispatch_embedded_open`), emitting
     // `bread.box.open_requested` back onto the bus; breadbar would open the
     // capsule again and this still-running subscription would keep spawning
-    // on every command it sees. So this branch never spawns — that part is
+    // on every command it sees. So this branch never spawns: that part is
     // correct and stays.
     //
     // It used to also emit `bread.box.open.done` here unconditionally, which
     // was a false-positive success report: `.done`'s documented meaning
     // (EVENTS.md) is "breadbox was spawned", which is literally untrue in
     // this branch, and there is no ack from breadbar on this one-way
-    // pub/sub bus — `BreadClient` has no way to ask "did anything actually
+    // pub/sub bus; `BreadClient` has no way to ask "did anything actually
     // pick this up" (same limitation `main.rs`'s `dispatch_embedded_open`
     // documents). Claiming `.done` reported a completion this process
-    // cannot observe — the same shape of bug as bug #6 (a namespace
+    // cannot observe, the same shape of bug as bug #6 (a namespace
     // violation making a false claim), just an over-eager "done" instead of
     // an under-eager warning. Since confirming the handoff isn't possible
     // with the current transport, this does the honest thing instead: log
@@ -91,7 +91,7 @@ fn handle_open() {
     }
 
     // Same as running `breadbox` from a keybind: toggle the overlay via the
-    // existing singleton. Spawn success is the command confirmation — we do
+    // existing singleton. Spawn success is the command confirmation; we do
     // not wait for the GTK window to map.
     let result = spawn_self();
     match result {
