@@ -2,7 +2,7 @@
 //!
 //! Mirrors breadbar's `src/theme.rs::shell_theme()` accessor: the underlying
 //! `bread_theme::shell::load()` call happens at most once per process (via
-//! the thread-local cache below), not once per call site — every place in
+//! the thread-local cache below), not once per call site: every place in
 //! this crate that needs launcher geometry/style reads through this shared
 //! instance instead of calling `bread_theme::shell::load()` itself.
 //!
@@ -26,14 +26,14 @@ pub fn shell_theme() -> Rc<ShellTheme> {
 }
 
 /// Fallback margin (pixels) for any `[launcher] top` value this function
-/// can't make sense of — breadbox's pre-theme hardcoded default.
+/// can't make sense of: breadbox's pre-theme hardcoded default.
 const DEFAULT_TOP_MARGIN_PX: i32 = 120;
 
 /// Parses a `[launcher] top` value (e.g. `"120px"`) into whole pixels for
-/// `Widget::set_margin_top`. Falls back to [`DEFAULT_TOP_MARGIN_PX`] — with a
-/// logged reason — for any form this Phase 4b-i doesn't understand yet (a
+/// `Widget::set_margin_top`. Falls back to [`DEFAULT_TOP_MARGIN_PX`] (with a
+/// logged reason) for any form this Phase 4b-i doesn't understand yet (a
 /// bare percentage like theme 04's `"16%"`, or a malformed value in a
-/// hand-edited theme) — per the manifest's "never fails to start" rule (plan
+/// hand-edited theme); per the manifest's "never fails to start" rule (plan
 /// §4), a launcher window is not worth refusing to open over an unparseable
 /// margin.
 ///
@@ -41,7 +41,7 @@ const DEFAULT_TOP_MARGIN_PX: i32 = 120;
 /// rather than passed straight through: `Widget::set_margin_top` requires a
 /// non-negative margin, and passing it a negative one silently does nothing
 /// useful (a `g_return_if_fail` on the GTK side) rather than the "push the
-/// panel up off-screen" a theme author might expect — 0 (flush with the top
+/// panel up off-screen" a theme author might expect: 0 (flush with the top
 /// edge) is the closest sane interpretation.
 pub fn top_margin_px(top: &str) -> i32 {
     let trimmed = top.trim().trim_end_matches("px");
@@ -82,7 +82,7 @@ mod tests {
     #[test]
     fn percentage_form_falls_back_to_default() {
         // The doc comment's own anticipated edge case (theme 04's original
-        // "16%" idea) — not parseable as a plain pixel count today.
+        // "16%" idea), not parseable as a plain pixel count today.
         assert_eq!(top_margin_px("16%"), DEFAULT_TOP_MARGIN_PX);
     }
 

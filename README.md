@@ -33,7 +33,7 @@ rust (stable)       (rustup toolchain install stable)
 # debug
 cargo build
 
-# release (recommended — put both binaries on $PATH)
+# release (recommended: put both binaries on $PATH)
 cargo build --release
 # binaries are at target/release/breadbox and target/release/breadbox-sync
 ```
@@ -88,9 +88,9 @@ breadbox-sync
 ```
 
 Icon resolution order:
-1. System icon theme (`~/.local/share/icons`, `/usr/share/icons`, `/usr/share/pixmaps`) — 64 px > 48 px PNG, then SVG
-2. Flathub media server — for reverse-DNS app IDs (e.g. `org.gnome.Gedit`)
-3. icon.horse — downloaded and cached
+1. System icon theme (`~/.local/share/icons`, `/usr/share/icons`, `/usr/share/pixmaps`): 64 px > 48 px PNG, then SVG
+2. Flathub media server, for reverse-DNS app IDs (e.g. `org.gnome.Gedit`)
+3. icon.horse, downloaded and cached
 4. `application-x-executable` fallback from system theme
 
 ### Systemd service (run on login)
@@ -121,4 +121,4 @@ Pressing the keybind again while the launcher is open dismisses it.
 
 ## Licence
 
-MIT — see [LICENSE](LICENSE).
+MIT, see [LICENSE](LICENSE).

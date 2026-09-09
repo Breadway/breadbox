@@ -1,7 +1,7 @@
 //! **Compatibility shim.** This crate used to own desktop-entry parsing,
 //! icon caching, and launch history; that substance now lives in
 //! `bread-launcher` (`bread-ecosystem`, feature/launcher-core) so breadbar's
-//! future embedded capsule can share it with breadbox's overlay window —
+//! future embedded capsule can share it with breadbox's overlay window:
 //! one launcher implementation, two hosts (see
 //! `bos-ui-demos/THEME_SYSTEM_PLAN.md` §3, §7).
 //!
@@ -10,7 +10,7 @@
 //! `bread_launcher`'s path/cache functions now take explicitly (so more
 //! than one host can use that crate without colliding on
 //! `~/.cache/<app>`). This exists purely so `breadbox` and `breadbox-sync`
-//! keep compiling with minimal churn — plan to remove it once both callers
+//! keep compiling with minimal churn; plan to remove it once both callers
 //! depend on `bread-launcher` directly instead.
 //!
 //! `Config`/`Context` are NOT part of that move: they're breadbox's own
@@ -27,7 +27,7 @@ pub use bread_launcher::{
 };
 
 /// The launcher's shared identity (`bread_launcher::LAUNCHER_APP`, currently
-/// `"breadbox"`) — NOT a breadbox-specific literal. breadbar's embedded
+/// `"breadbox"`), NOT a breadbox-specific literal. breadbar's embedded
 /// capsule (theme 04/spotlight) reads/writes this exact same on-disk cache
 /// and history, so the two surfaces stay one launcher with one ranking
 /// instead of forking into two (see `LAUNCHER_APP`'s own doc comment).

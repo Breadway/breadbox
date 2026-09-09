@@ -1,11 +1,11 @@
 //! `--screenshot` CLI mode: render breadbox's launcher panel, capture it via
-//! `bread-screenshots`, then exit — driven by `bread-ecosystem`'s
+//! `bread-screenshots`, then exit; driven by `bread-ecosystem`'s
 //! `bread-capture` orchestrator, or run standalone for one-off captures.
 //!
 //! breadbox has only one view worth capturing: the launcher panel itself
 //! (search box + app list). It's a `halign: Center` panel over a full-screen
-//! transparent overlay window, not its own layer surface, so — same
-//! reasoning as breadbar's control-panel view — the simplest reliable
+//! transparent overlay window, not its own layer surface, so (same
+//! reasoning as breadbar's control-panel view) the simplest reliable
 //! capture is the whole known-size canvas, not a hand-tracked panel
 //! geometry.
 
@@ -26,12 +26,12 @@ pub struct Cli {
     #[arg(long)]
     pub output: Option<PathBuf>,
 
-    /// Capture canvas width — matches the isolated compositor's output width
+    /// Capture canvas width, matches the isolated compositor's output width
     /// (`bread-capture --isolate-width`).
     #[arg(long, default_value_t = DEFAULT_WIDTH)]
     pub width: u32,
 
-    /// Capture canvas height — see `width`.
+    /// Capture canvas height; see `width`.
     #[arg(long, default_value_t = DEFAULT_HEIGHT)]
     pub height: u32,
 }
@@ -63,7 +63,7 @@ impl Cli {
 }
 
 /// Wire up the given view's screenshot sequence against an already-built,
-/// not-yet-presented window. Every path here ends by exiting the process —
+/// not-yet-presented window. Every path here ends by exiting the process;
 /// it never returns control to the normal launcher UI.
 pub fn dispatch(window: &gtk4::ApplicationWindow, req: ScreenshotRequest) {
     match req.view.as_str() {
