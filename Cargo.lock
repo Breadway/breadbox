@@ -152,7 +152,7 @@ dependencies = [
 
 [[package]]
 name = "breadbox"
-version = "0.3.3"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "bread-launcher",
@@ -169,7 +169,7 @@ dependencies = [
 
 [[package]]
 name = "breadbox-shared"
-version = "0.3.3"
+version = "0.4.0"
 dependencies = [
  "bread-launcher",
  "serde",
@@ -179,7 +179,7 @@ dependencies = [
 
 [[package]]
 name = "breadbox-sync"
-version = "0.3.3"
+version = "0.4.0"
 dependencies = [
  "breadbox-shared",
  "serde_json",
