@@ -14,7 +14,7 @@ breadbox          GTK4 layer-shell launcher
 - Reads the active Hyprland workspace and sorts apps by context priority
 - Fuzzy filtering as you type; Enter launches, Escape closes
 - App icons loaded from the resolved icon cache (see `breadbox-sync`)
-- pywal accents from `~/.cache/wal/colors.json`; background/surface/overlay/foreground stay fixed BOS dark
+- Accent colors from bread-theme's palette cache; background/surface/overlay/foreground stay fixed BOS dark
 - User CSS override at `~/.config/breadbox/style.css`
 - Toggle/dismiss: running a second instance kills the first
 
@@ -69,8 +69,8 @@ priority = ["slack", "discord"]
 
 ### CSS theming
 
-breadbox applies pywal colors automatically when `~/.cache/wal/colors.json` is
-present. To override or extend the theme:
+breadbox applies bread-theme's accent palette automatically. To override or
+extend the theme:
 
 ```bash
 ~/.config/breadbox/style.css
