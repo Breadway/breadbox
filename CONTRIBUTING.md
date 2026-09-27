@@ -79,8 +79,8 @@ bread-ecosystem's shared script from this checkout:
 cargo build --release --workspace   # no --locked: the patched deps resolve to main
 ```
 
-This clones each dependency repo's `main` into `.dev-deps/` (or a sibling
-directory if `DEV_DEPS_DIR` points elsewhere), writes a generated,
+This clones each dependency repo's `main` as a true sibling of this
+checkout (or wherever `DEV_DEPS_DIR` points, if set), writes a generated,
 gitignored `.cargo/config.toml`, and updates `Cargo.lock` to match. Discard
 both (`git checkout -- Cargo.lock` and remove `.cargo/config.toml`) when
 you're done. See bread-ecosystem's `docs/release-channels.md`

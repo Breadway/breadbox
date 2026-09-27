@@ -42,15 +42,20 @@ jobs:
       - name: lint git.breadway.dev dependency pins
         run: bash "${ECOSYSTEM_CI_DIR}/scripts/lint-pins.sh" --root src
 
-      # ci/build.sh's docker wrapper only bind-mounts src (REPO_ROOT), so
-      # the cloned dependencies must live inside it to be visible to the
-      # clippy/test steps below, which run inside that container.
+      # DEV_DEPS_DIR is left at its default (a true sibling of src, in the
+      # job's own working directory): ci/build.sh's docker wrapper mounts
+      # src's PARENT directory (not just src itself), so a sibling clone is
+      # visible inside the container at the same relative position as on
+      # the host. breadbox is itself a Cargo workspace; forcing the clone
+      # *inside* src instead (breadbar's original pattern, needed only
+      # because its own ci/build.sh predates this fix) breaks Cargo's
+      # workspace-field inheritance for a workspace consumer, see
+      # bread-ecosystem's ci/build.sh for the full explanation.
       - name: resolve dev dependencies to main
         run: |
           set -euo pipefail
           cd src
-          DEV_DEPS_DIR="$(pwd)/.dev-deps" \
-            bash "${ECOSYSTEM_CI_DIR}/scripts/dev-deps.sh" --root .
+          bash "${ECOSYSTEM_CI_DIR}/scripts/dev-deps.sh" --root .
           rm -rf "${ECOSYSTEM_CI_DIR}"
 
       - name: clippy
