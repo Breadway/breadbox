@@ -119,6 +119,20 @@ bind = $mainMod, SPACE, exec, breadbox
 
 Pressing the keybind again while the launcher is open dismisses it.
 
+## Diagnostics
+
+breadbox keeps a bounded, private input and main-loop log at
+`$XDG_STATE_HOME/breadbox/breadbox.log` (or
+`$HOME/.local/state/breadbox/breadbox.log` when `XDG_STATE_HOME` is unset).
+The log records keycodes and modifier bits, search focus changes, query timing
+and result counts, and a 500 ms heartbeat while the window is open. It does not
+record typed characters or search text. One previous log is kept as
+`breadbox.log.1`.
+
+Run `breadbox --bug-report` to print a copyable report with recent diagnostic
+events and a small allowlist of session details. Review the report before
+sharing it.
+
 ## Licence
 
 MIT, see [LICENSE](LICENSE).

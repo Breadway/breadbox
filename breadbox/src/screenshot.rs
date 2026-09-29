@@ -17,6 +17,11 @@ use std::path::PathBuf;
 #[derive(Parser)]
 #[command(name = "breadbox")]
 pub struct Cli {
+    /// Print a copyable diagnostics report containing safe session metadata
+    /// and recent breadbox diagnostic events, then exit.
+    #[arg(long)]
+    pub bug_report: bool,
+
     /// Render the named view, capture it, then exit instead of running
     /// normally. Known views: "launcher".
     #[arg(long)]

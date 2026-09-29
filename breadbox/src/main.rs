@@ -8,6 +8,7 @@ use std::{
     os::unix::net::UnixStream,
     path::PathBuf,
     rc::Rc,
+    time::{Duration, Instant},
 };
 
 /// This app's id in bread's sibling-app namespace registry
@@ -29,6 +30,7 @@ use gtk4::{
     Orientation, SearchEntry,
 };
 
+mod diagnostics;
 mod listen;
 mod screenshot;
 mod theme;
@@ -121,6 +123,7 @@ fn run_ui(
     history: LaunchHistory,
     screenshot_req: Option<screenshot::ScreenshotRequest>,
 ) {
+    diagnostics::log_startup_context();
     let mut builder = Application::builder().application_id("com.breadway.breadbox");
     if screenshot_req.is_some() {
         // GApplication is single-instance by default; this machine typically
@@ -157,6 +160,13 @@ fn run_ui(
 
         // Full-screen transparent overlay; panel widget is positioned inside it.
         let window = bread_utils::gtk_popup::new_overlay_window(app, "breadbox");
+        window.connect_is_active_notify(|window| {
+            tracing::info!(
+                target: "breadbox::diagnostics",
+                event = "window_active_changed",
+                active = window.is_active(),
+            );
+        });
         // Bind the *app* sheet (not just the shared one) as the widget-tree
         // provider. `bind_window_auto` alone re-broadcasts the shared
         // component sheet (which includes `window { background-color: @bg }`)
@@ -202,6 +212,13 @@ fn run_ui(
         // {liquid-motion,glass-workbench}.html); no user-visible copy here
         // should read like an internal identifier.
         search.set_placeholder_text(Some("Search"));
+        search.connect_has_focus_notify(|entry| {
+            tracing::info!(
+                target: "breadbox::diagnostics",
+                event = "search_focus_changed",
+                focused = entry.has_focus(),
+            );
+        });
         vbox.append(&search);
 
         // Row building, fuzzy filtering, match/history sorting, and
@@ -238,11 +255,16 @@ fn run_ui(
         let footer_f = footer.clone();
         let footer_kind = launcher.footer.clone();
         search.connect_changed(move |entry| {
+            let started = Instant::now();
             results_f.set_query(entry.text().as_str());
-            footer_f.set_label(&footer_text(
-                &footer_kind,
-                visible_app_count(&results_f.list),
-            ));
+            let match_count = visible_app_count(&results_f.list);
+            footer_f.set_label(&footer_text(&footer_kind, match_count));
+            tracing::info!(
+                target: "breadbox::diagnostics",
+                event = "query_updated",
+                elapsed_us = started.elapsed().as_micros() as u64,
+                matches = match_count,
+            );
         });
 
         // Keyboard handling: capture phase on window
@@ -250,7 +272,13 @@ fn run_ui(
         key_ctrl.set_propagation_phase(gtk4::PropagationPhase::Capture);
         let close_k = Rc::clone(&close_all);
         let results_k = results.clone();
-        key_ctrl.connect_key_pressed(move |_, key, _, _| {
+        key_ctrl.connect_key_pressed(move |_, key, keycode, modifiers| {
+            tracing::info!(
+                target: "breadbox::diagnostics",
+                event = "key_pressed",
+                keycode,
+                modifiers = modifiers.bits(),
+            );
             use gtk4::gdk::Key;
             match key {
                 Key::Escape => {
@@ -276,7 +304,38 @@ fn run_ui(
                 _ => glib::Propagation::Proceed,
             }
         });
+        key_ctrl.connect_key_released(|_, _, keycode, modifiers| {
+            tracing::info!(
+                target: "breadbox::diagnostics",
+                event = "key_released",
+                keycode,
+                modifiers = modifiers.bits(),
+            );
+        });
         window.add_controller(key_ctrl);
+
+        // If this heartbeat stops in the log while the popup remains mapped,
+        // the GTK main loop is stalled. If it continues while key events stop,
+        // keyboard delivery or focus is the more likely boundary.
+        let heartbeat_window = window.downgrade();
+        let started = Instant::now();
+        let mut heartbeat_count = 0u64;
+        glib::timeout_add_local(Duration::from_millis(500), move || {
+            let Some(window) = heartbeat_window.upgrade() else {
+                return glib::ControlFlow::Break;
+            };
+            if !window.is_visible() {
+                return glib::ControlFlow::Break;
+            }
+            heartbeat_count += 1;
+            tracing::info!(
+                target: "breadbox::diagnostics",
+                event = "main_loop_heartbeat",
+                tick = heartbeat_count,
+                elapsed_ms = started.elapsed().as_millis() as u64,
+            );
+            glib::ControlFlow::Continue
+        });
 
         // Row click launches
         let close_a = Rc::clone(&close_all);
@@ -316,15 +375,12 @@ fn run_ui(
 // ---- Main -------------------------------------------------------------------
 
 fn main() {
-    // Surface bread-theme / bread-utils `tracing::warn!` (dropped silently
-    // before). `RUST_LOG` overrides; default warn+.
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn")),
-        )
-        .with_writer(std::io::stderr)
-        .init();
+    // Persistent diagnostics use a private, bounded file under
+    // $XDG_STATE_HOME/breadbox, with stderr as a startup fallback.
+    let diagnostics_path = diagnostics::init();
+    if let Some(path) = diagnostics_path {
+        eprintln!("breadbox diagnostics log: {}", path.display());
+    }
 
     if std::env::args().nth(1).as_deref() == Some("listen") {
         listen::run();
@@ -333,6 +389,10 @@ fn main() {
 
     use clap::Parser;
     let cli = screenshot::Cli::parse();
+    if cli.bug_report {
+        diagnostics::print_bug_report();
+        return;
+    }
     let screenshot_req = cli.screenshot_request();
 
     // Under an `[launcher] mode = "embedded"` theme (spotlight,

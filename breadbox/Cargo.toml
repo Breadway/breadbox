@@ -25,3 +25,4 @@ anyhow = "1"
 # Subscriber for bread-theme / bread-utils `tracing` events, dropped
 # silently without one. env-filter for RUST_LOG.
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing = "0.1"
