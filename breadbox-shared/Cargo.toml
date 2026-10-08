@@ -12,4 +12,4 @@ toml = "0.8"
 # own has moved to bread-ecosystem's bread-launcher (feature/launcher-core)
 # so breadbar can share it too; see src/lib.rs. No `gtk` feature: this
 # shim only re-exports the headless half.
-bread-launcher = { git = "https://git.breadway.dev/Breadway/bread-ecosystem", tag = "v0.7.5" }
+bread-launcher = { git = "https://git.breadway.dev/Breadway/bread-ecosystem", tag = "v0.8.1-rc.2" }
