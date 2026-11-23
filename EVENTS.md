@@ -1,4 +1,4 @@
-# breadbox: bread event integration
+# box: bread event integration
 
 breadbox is a standalone app launcher: it works exactly the same with or
 without `breadd` running. When breadd *is* present, the GTK launcher
