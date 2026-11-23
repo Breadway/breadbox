@@ -1,4 +1,4 @@
-# breadbox: bread event integration
+# box: bread event integration
 
 breadbox is a standalone app launcher: it works exactly the same with or
 without `breadd` running. When breadd *is* present, the GTK launcher
@@ -57,12 +57,36 @@ never emitted there. A workflow that needs to work under every theme
 should wait on `bread.box.open.redirected` too (or treat a timeout as
 "probably fine, embedded themes have no ack" rather than a failure).
 
-### Not implemented: extra verbs
+## Not implemented
 
 There is no `launch` / `close` / `query` command verb. Picking a desktop
 id from the bus would be a new product surface. If/when that exists, add
 the corresponding `bread.command.box.*` verb at the same time, not
 stubbed as a no-op ahead of it.
+
+## Fail-safe behavior
+
+- If breadd isn't installed or isn't running, `emit` is a silent no-op
+  (`BreadClient::emit` never blocks or errors the caller) and the
+  command subscription simply never receives anything: launching,
+  history, theming, and the singleton toggle are entirely unaffected.
+  Under an embedded theme specifically, a direct `breadbox` invocation
+  additionally checks reachability up front and falls back to mapping
+  its own overlay window when breadd is down (see the embedded launcher
+  theme section below), so this
+  invariant now holds there too, not just for every other theme.
+- If breadd restarts, the command subscription reconnects automatically
+  (`BreadClient::subscribe`'s background thread has its own backoff
+  loop); no restart of `breadbox listen` is needed.
+- If `breadbox listen` is not running, commands are a graceful no-op at
+  the bus (no subscriber). The CLI still works, and one-shot invocations
+  still emit `bread.box.launched` on their own short-lived connection.
+- Closing the launcher without launching anything emits nothing.
+- What is **not** covered: under an embedded theme, if breadd is
+  reachable but breadbar itself isn't running (or isn't subscribed),
+  neither the direct-keybind path nor the command path can detect that
+  or fall back further; both are fire-and-forget with no ack. This is
+  a known limitation of the current transport, not an oversight.
 
 ## Embedded launcher theme (spotlight)
 
@@ -92,25 +116,3 @@ the command side: under an embedded theme it never spawns, logs to
 stderr, and emits `bread.box.open.redirected` instead of `.done`; see
 the events table above for why `.done` would be a false claim here.
 
-## Fail-safe behavior
-
-- If breadd isn't installed or isn't running, `emit` is a silent no-op
-  (`BreadClient::emit` never blocks or errors the caller) and the
-  command subscription simply never receives anything: launching,
-  history, theming, and the singleton toggle are entirely unaffected.
-  Under an embedded theme specifically, a direct `breadbox` invocation
-  additionally checks reachability up front and falls back to mapping
-  its own overlay window when breadd is down (see above), so this
-  invariant now holds there too, not just for every other theme.
-- If breadd restarts, the command subscription reconnects automatically
-  (`BreadClient::subscribe`'s background thread has its own backoff
-  loop); no restart of `breadbox listen` is needed.
-- If `breadbox listen` is not running, commands are a graceful no-op at
-  the bus (no subscriber). The CLI still works, and one-shot invocations
-  still emit `bread.box.launched` on their own short-lived connection.
-- Closing the launcher without launching anything emits nothing.
-- What is **not** covered: under an embedded theme, if breadd is
-  reachable but breadbar itself isn't running (or isn't subscribed),
-  neither the direct-keybind path nor the command path can detect that
-  or fall back further; both are fire-and-forget with no ack. This is
-  a known limitation of the current transport, not an oversight.
